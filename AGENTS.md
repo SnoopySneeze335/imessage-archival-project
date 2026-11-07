@@ -39,6 +39,7 @@ scripts/ci/           repository guards (file size, PII scan)
 scripts/cloud-setup.sh  toolchain setup for cloud sessions
 docker/               container entrypoint
 docs/                 SPEC.md, ROADMAP.md
+docs/decisions/       decision records (read before changing what they cover)
 ```
 
 ## Commands
@@ -108,6 +109,15 @@ pass.
   `user.db` (people, links, merges, settings) is not: treat changes to its
   schema with extra care and provide migrations.
 - Times are stored in UTC and displayed in the user's timezone setting.
+
+## Decisions
+
+Lasting technical decisions are recorded in `docs/decisions/NNNN-title.md`
+(context, decision, consequences). Read the relevant ones before changing
+what they cover; to reverse one, add a new record that supersedes it.
+
+- [0001](docs/decisions/0001-runtime-image.md): Ubuntu 24.04 runtime image,
+  `libheif-plugin-libde265`, and the build-time HEIC decode check.
 
 ## Dependencies
 
