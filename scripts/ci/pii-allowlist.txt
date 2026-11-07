@@ -1,0 +1,4 @@
+# Fixed strings the PII guard ignores outside fixtures/. Keep this short and
+# never add a real person's number or address.
+noreply@anthropic.com
+noreply@github.com

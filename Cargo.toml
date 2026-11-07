@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = ["crates/imessage-ap", "fixtures/generator"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/SnoopySneeze335/imessage-archival-project"
+rust-version = "1.97"
+
+# Every version is pinned exactly. Upgrades are deliberate: see AGENTS.md.
+[workspace.dependencies]
+anyhow = "=1.0.104"
+axum = "=0.8.9"
+clap = { version = "=4.6.7", features = ["derive", "env"] }
+plist = "=1.10.3"
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sha1 = "=0.10.7"
+tempfile = "=3.27.0"
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tower = { version = "=0.5.3", features = ["util"] }
+tower-http = { version = "=0.7.1", features = ["fs", "set-header", "trace"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
+http-body-util = "=0.1.5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

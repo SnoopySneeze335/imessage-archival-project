@@ -1,0 +1,11 @@
+.git
+target
+web/node_modules
+web/dist
+fixtures/out
+data
+backups
+exports
+**/*.db
+**/*.pdf
+.env*

@@ -1,0 +1,27 @@
+[package]
+name = "fixture-gen"
+description = "Generates a fake, deterministic iPhone backup for tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "make-fixture"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+plist.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+
+[dev-dependencies]
+plist.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
