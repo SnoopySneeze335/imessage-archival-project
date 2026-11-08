@@ -1,0 +1,50 @@
+{
+  "archive_schema_version": 1,
+  "archive": {
+    "sources": 1,
+    "import_runs_succeeded": 2,
+    "import_runs_failed": 0,
+    "messages": 371159,
+    "messages_in_chat": 371126,
+    "messages_recovered_deleted": 7,
+    "orphan_messages": 26,
+    "reactions": 16052,
+    "replies": 73219,
+    "chats": 1002,
+    "chats_sharing_identifier": 0,
+    "handles": 1431,
+    "unique_addresses": 1104,
+    "attachment_records": 27694,
+    "attachments_with_file": 25040,
+    "attachment_files_missing": 2652,
+    "attachments_without_path": 2
+  },
+  "sources": [
+    {
+      "id": 1,
+      "device_name": "mason’s iphone",
+      "ios_version": "26.1",
+      "backup_date": 1767575013,
+      "handle_rows": 1431,
+      "chat_rows": 1002,
+      "messages_held": 371159,
+      "diagnostics": {
+        "attachment_bytes_on_disk": 49086254711,
+        "attachment_bytes_referenced": 72515298131,
+        "attachments": 27694,
+        "attachments_missing_file": 2654,
+        "attachments_no_path": 2,
+        "chats": 1002,
+        "chats_with_no_handles": 0,
+        "duplicated_chats": 31,
+        "handles": 1431,
+        "merged_handles": 334,
+        "messages": 371159,
+        "messages_in_multiple_chats": 0,
+        "messages_without_chat": 33,
+        "multi_handle_groups": 313,
+        "recoverable_messages": 7
+      }
+    }
+  ]
+}

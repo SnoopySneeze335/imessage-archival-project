@@ -13,8 +13,7 @@ and shows them in a fast, iMessage-like web app. It runs as one Docker
 container, for one user, on a home server reachable over Tailscale. No data
 ever leaves that server.
 
-**Milestone in progress: 2, Ingester** (2a done; 2b next; see the roadmap). Work only on the
-current milestone unless told otherwise.
+**Milestone in progress: 2, Ingester** (2a done, 2b next). Work only on it unless told otherwise.
 
 ## Stack
 
@@ -73,8 +72,7 @@ scripts/ci/check-pii.sh
 docker build -t imessage-ap .
 ```
 
-A change is done when fmt, clippy, the tests, the web build and both guards
-pass.
+A change is done when fmt, clippy, the tests, the web build and both guards pass.
 
 ## Privacy rules (non-negotiable)
 
@@ -131,9 +129,11 @@ what they cover; to reverse one, add a new record that supersedes it.
 - Pin exact versions: `=x.y.z` in `[workspace.dependencies]` and exact versions
   in `web/package.json`. Commit `Cargo.lock` and `package-lock.json`.
 - Add crates to the workspace table, not to a member crate directly.
-- Upgrades are deliberate, in their own PR. After upgrading the iMessage
-  crates, run the fixture tests and ask the user for a count check against
-  the real backup.
+- Upgrades are deliberate, in their own PR, and run the fixture tests.
+- **Count check:** after any change to the ingester (`ingest.rs`, `backup.rs`,
+  `archive/`) or a crate upgrade, ask the user to re-run the count check on
+  the real backup (`ingest` then `stats --json`) and compare it with
+  `docs/reference/jan4-baseline.json`. Explain every difference in the PR.
 
 ## Branches and pull requests
 
