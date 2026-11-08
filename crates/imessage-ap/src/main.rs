@@ -46,6 +46,13 @@ enum Command {
         #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
         data: PathBuf,
     },
+    /// Upgrade archive.db to this build's schema, then exit. Ingest does the
+    /// same on its own; this only migrates, so stats can be checked first.
+    Migrate {
+        /// Data directory containing archive.db.
+        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
+        data: PathBuf,
+    },
     /// Print archive counts (no message content) for comparison with the
     /// backup diagnostics in docs/SPEC.md.
     Stats {
@@ -116,6 +123,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 "  messages     {:>9} seen {:>9} added",
                 c.messages_seen, c.messages_added
             );
+            println!(
+                "  versions     {:>9} added {:>9} messages changed",
+                c.message_versions_added, c.messages_changed
+            );
+            println!("  edits        {:>9} added", c.message_edits_added);
             println!("  reactions    {:>9} added", c.reactions_added);
             println!(
                 "  attachments  {:>9} seen {:>9} added {:>9} with file",
@@ -125,6 +137,19 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             for (kind, n) in &summary.issues_by_kind {
                 println!("    {kind:<32}{n:>9}");
             }
+            Ok(())
+        }
+        Command::Migrate { data } => {
+            anyhow::ensure!(
+                imessage_ap::archive::path(&data).is_file(),
+                "no archive at {}",
+                imessage_ap::archive::path(&data).display()
+            );
+            drop(imessage_ap::archive::open(&data)?);
+            println!(
+                "archive.db is at schema version {}",
+                imessage_ap::archive::schema_version()
+            );
             Ok(())
         }
         Command::Stats { data, json } => {

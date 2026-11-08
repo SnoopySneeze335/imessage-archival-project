@@ -13,7 +13,7 @@ and shows them in a fast, iMessage-like web app. It runs as one Docker
 container, for one user, on a home server reachable over Tailscale. No data
 ever leaves that server.
 
-**Milestone in progress: 2, Ingester** (2a done, 2b next). Work only on it unless told otherwise.
+**Milestone in progress: 3, Attachments.** Work only on it unless told otherwise.
 
 ## Stack
 
@@ -51,8 +51,9 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 
-# Fake backup for tests and manual runs -> fixtures/out/backup-v1 (gitignored)
+# Fake backups for tests and manual runs -> fixtures/out/ (gitignored)
 cargo run -p fixture-gen -- --out fixtures/out/backup-v1 --force
+cargo run -p fixture-gen -- --out fixtures/out/backup-v2 --variant v2 --force  # later backup
 
 # Server against the built web app
 cargo run -p imessage-ap -- serve --port 8080 --data ./data --web web/dist
@@ -60,6 +61,7 @@ cargo run -p imessage-ap -- serve --port 8080 --data ./data --web web/dist
 # Import the fixture and print counts
 cargo run -p imessage-ap -- ingest --backup fixtures/out/backup-v1 --data ./data
 cargo run -p imessage-ap -- stats --data ./data
+cargo run -p imessage-ap -- migrate --data ./data   # schema upgrade only (ingest also migrates)
 
 # Web
 cd web && npm ci && npm run typecheck && npm run build   # npm run dev proxies /api to :8080
@@ -125,6 +127,8 @@ what they cover; to reverse one, add a new record that supersedes it.
   append-only imports, and strictly read-only backup access.
 - [0003](docs/decisions/0003-count-check-differences.md): why the archive's
   handle and chat counts differ from the crate's, and the Jan 4 leftovers.
+- [0004](docs/decisions/0004-versions-and-multiple-backups.md): message
+  versions, newest-backup-wins, and import-order independence.
 
 ## Dependencies
 

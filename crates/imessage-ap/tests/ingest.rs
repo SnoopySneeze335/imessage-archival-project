@@ -1,14 +1,16 @@
 //! Ingest tests against the generated fixture backup.
 
+mod common;
+
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
     path::{Path, PathBuf},
 };
 
+use common::{archive_db, count, dump, issues};
 use fixture_gen::{SMS_DB, file_id, generate, scenario};
 use imessage_ap::{archive, ingest, stats};
-use rusqlite::Connection;
 use tempfile::TempDir;
 
 struct Env {
@@ -29,54 +31,6 @@ fn env() -> Env {
         data,
         expected,
     }
-}
-
-fn archive_db(data: &Path) -> Connection {
-    Connection::open(archive::path(data)).unwrap()
-}
-
-fn count(conn: &Connection, sql: &str) -> usize {
-    conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap() as usize
-}
-
-fn issues(conn: &Connection, run_id: i64, kind: &str) -> Vec<String> {
-    let mut stmt = conn
-        .prepare("SELECT guid FROM import_issue WHERE run_id = ?1 AND kind = ?2 ORDER BY guid")
-        .unwrap();
-    stmt.query_map(rusqlite::params![run_id, kind], |r| r.get(0))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect()
-}
-
-/// Every data table's rows, in a stable order. Excludes the per-run tables.
-fn dump(conn: &Connection) -> String {
-    let mut tables: Vec<String> = conn
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('import_run', 'import_issue') ORDER BY name")
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    tables.retain(|t| !t.starts_with("sqlite_"));
-    let mut out = String::new();
-    for t in tables {
-        let mut stmt = conn.prepare(&format!("SELECT * FROM {t}")).unwrap();
-        let n = stmt.column_count();
-        let mut rows: Vec<String> = stmt
-            .query_map([], |r| {
-                Ok((0..n)
-                    .map(|i| format!("{:?}", r.get_ref(i).unwrap()))
-                    .collect::<Vec<_>>()
-                    .join("|"))
-            })
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        rows.sort();
-        out.push_str(&format!("## {t}\n{}\n", rows.join("\n")));
-    }
-    out
 }
 
 /// Path, size and content hash of every file under `root`.
@@ -155,9 +109,38 @@ fn first_import_matches_fixture_expectations() {
     assert!(
         count(
             &db,
-            "SELECT COUNT(*) FROM message_raw WHERE attributed_body IS NOT NULL"
+            "SELECT COUNT(*) FROM message_version WHERE attributed_body IS NOT NULL"
         ) > 0
     );
+
+    // One version per message after a single import; edit history parsed;
+    // link-preview payloads kept as stored.
+    assert_eq!(a.message_versions as usize, x.messages);
+    assert_eq!(a.messages_with_versions, 0);
+    assert_eq!(a.message_edits as usize, x.edit_events);
+    assert_eq!(c.message_versions_added, x.messages);
+    assert_eq!(c.messages_changed, 0);
+    assert_eq!(
+        count(
+            &db,
+            "SELECT COUNT(*) FROM message_version WHERE payload_data IS NOT NULL
+             AND balloon_bundle_id = 'com.apple.messages.URLBalloonProvider'"
+        ),
+        x.link_previews
+    );
+    let edits: Vec<(i64, String)> = db
+        .prepare(
+            "SELECT e.edited_at, e.text FROM message_edit e JOIN message m ON m.id = e.message_id
+             WHERE m.text = 'See you at 10:30 instead' ORDER BY e.edited_at",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let texts: Vec<&str> = edits.iter().map(|(_, t)| t.as_str()).collect();
+    assert_eq!(texts, ["See you at 10 instead", "See you at 10:30 instead"]);
+    assert_eq!(edits[1].0 - edits[0].0, 90 * 1_000_000_000);
 }
 
 #[test]
@@ -219,7 +202,11 @@ fn reactions_link_to_their_targets() {
             )
             .unwrap();
         assert_eq!(target, expected_target, "{}", m.guid);
-        assert!(target_exists, "target of {} is in the archive", m.guid);
+        let in_fixture = scenario::build()
+            .messages
+            .iter()
+            .any(|t| t.guid == expected_target);
+        assert_eq!(target_exists, in_fixture, "target of {}", m.guid);
         assert_eq!(removal, m.associated_message_type >= 3000, "{}", m.guid);
         assert_eq!(emoji, m.associated_message_emoji, "{}", m.guid);
     }
@@ -233,7 +220,22 @@ fn reactions_link_to_their_targets() {
             .any(|m| m.associated_message_emoji.is_some()),
         "fixture has an emoji reaction"
     );
-    assert!(issues(&db, run, ingest::issue::REACTION_TARGET_MISSING).is_empty());
+    let target_missing: Vec<String> = reactions
+        .iter()
+        .filter(|m| {
+            let t = m.associated_message_guid.as_deref().unwrap();
+            !scenario::build()
+                .messages
+                .iter()
+                .any(|x| t.ends_with(x.guid.as_str()))
+        })
+        .map(|m| m.guid.clone())
+        .collect();
+    assert_eq!(target_missing.len(), e.expected.reactions_without_target);
+    assert_eq!(
+        issues(&db, run, ingest::issue::REACTION_TARGET_MISSING),
+        target_missing
+    );
 }
 
 #[test]
@@ -286,13 +288,14 @@ fn missing_attachment_files_are_flagged() {
     let s = scenario::build();
     let mut missing_file = Vec::new();
     let mut no_path = Vec::new();
+    let mut ownerless = Vec::new();
     for a in &s.attachments {
-        let (missing, present, owner): (Option<String>, bool, String) = db
+        let (missing, present, owner): (Option<String>, bool, Option<String>) = db
             .query_row(
                 "SELECT a.missing, s.present, m.guid FROM attachment a
                  JOIN attachment_source s ON s.attachment_id = a.id
-                 JOIN message_attachment ma ON ma.attachment_id = a.id
-                 JOIN message m ON m.id = ma.message_id
+                 LEFT JOIN message_attachment ma ON ma.attachment_id = a.id
+                 LEFT JOIN message m ON m.id = ma.message_id
                  WHERE a.guid = ?1",
                 [&a.guid],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -302,8 +305,11 @@ fn missing_attachment_files_are_flagged() {
             .messages
             .iter()
             .find(|m| m.attachments.contains(&a.rowid))
-            .unwrap();
-        assert_eq!(owner, owner_expected.guid);
+            .map(|m| m.guid.clone());
+        assert_eq!(owner, owner_expected, "owner of {}", a.guid);
+        if owner.is_none() {
+            ownerless.push(a.guid.clone());
+        }
         match (&a.filename, &a.content) {
             (None, _) => {
                 assert_eq!(missing.as_deref(), Some("no_path"));
@@ -328,6 +334,14 @@ fn missing_attachment_files_are_flagged() {
         missing_file
     );
     assert_eq!(issues(&db, run, ingest::issue::ATTACHMENT_NO_PATH), no_path);
+    // Leftover attachment rows are kept and reported (decision 0003).
+    assert_eq!(ownerless.len(), e.expected.attachments_without_message);
+    assert!(!ownerless.is_empty());
+    ownerless.sort();
+    assert_eq!(
+        issues(&db, run, ingest::issue::ATTACHMENT_WITHOUT_MESSAGE),
+        ownerless
+    );
 }
 
 #[test]

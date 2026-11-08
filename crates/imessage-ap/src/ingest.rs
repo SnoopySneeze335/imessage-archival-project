@@ -3,8 +3,9 @@
 //! An import adds only what is new, keyed on Apple's GUIDs, and records an
 //! `import_run` with counts and an `import_issue` for every problem found.
 //! Running it twice changes no data: the second run records a run that added
-//! nothing. Changed messages (edits between backups) are versioned in
-//! Milestone 2b; until then the first stored copy is kept.
+//! nothing. A message whose content changed between backups keeps every
+//! version, and each record's current fields come from the newest backup that
+//! holds it, so backups can be imported in any order (decision 0004).
 //!
 //! Logs and issues carry counts, GUIDs and row numbers only, never message
 //! text, names or addresses.
@@ -15,18 +16,19 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use imessage_database::{
     tables::{
-        attachment::Attachment, capabilities::Capabilities, chat_handle::ChatToHandle,
-        handle::Handle, messages::Message,
+        attachment::Attachment, chat_handle::ChatToHandle, handle::Handle, messages::Message,
     },
-    util::{platform::Platform, query_context::QueryContext},
+    util::platform::Platform,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use serde::Serialize;
 
 use crate::{address, archive, backup::Backup};
+
+mod messages;
 
 /// Version of the imessage-database crate this build reads backups with.
 pub const IMESSAGE_DATABASE_VERSION: &str = "5.0.1";
@@ -43,6 +45,11 @@ pub struct Counts {
     pub chats_added: usize,
     pub messages_seen: usize,
     pub messages_added: usize,
+    /// New content versions, including the first version of new messages.
+    pub message_versions_added: usize,
+    /// Messages already in the archive whose content differs in this backup.
+    pub messages_changed: usize,
+    pub message_edits_added: usize,
     pub reactions_added: usize,
     pub attachments_seen: usize,
     pub attachments_added: usize,
@@ -69,6 +76,14 @@ pub mod issue {
     pub const UNKNOWN_HANDLE: &str = "unknown_handle";
     pub const DECODE_FAILED: &str = "decode_failed";
     pub const ATTACHMENT_WITHOUT_MESSAGE: &str = "attachment_without_message";
+}
+
+/// The backup being imported.
+#[derive(Debug, Clone, Copy)]
+struct Source {
+    id: i64,
+    /// Unix seconds; decides which backup's copy of a record is current.
+    backup_date: i64,
 }
 
 struct Issue {
@@ -125,33 +140,19 @@ fn import(
 ) -> Result<Summary> {
     let mut counts = Counts::default();
     let mut issues: Vec<Issue> = Vec::new();
-    let source_id = upsert_source(tx, backup)?;
+    let source = upsert_source(tx, backup)?;
+    let source_id = source.id;
     tx.execute(
         "UPDATE import_run SET source_id = ?2 WHERE id = ?1",
         params![run_id, source_id],
     )?;
 
     let handles = import_handles(tx, sms, source_id, &mut counts)?;
-    let chats = import_chats(tx, sms, source_id, &handles, &mut counts, &mut issues)?;
-    let messages = import_messages(
-        tx,
-        sms,
-        source_id,
-        &handles,
-        &chats,
-        &mut counts,
-        &mut issues,
-    )?;
-    import_attachments(
-        tx,
-        sms,
-        backup,
-        source_id,
-        &messages,
-        &mut counts,
-        &mut issues,
-    )?;
-    check_reaction_targets(tx, source_id, &mut issues)?;
+    let chats = import_chats(tx, sms, source, &handles, &mut counts, &mut issues)?;
+    let messages =
+        messages::import_messages(tx, sms, source, &handles, &chats, &mut counts, &mut issues)?;
+    import_attachments(tx, sms, backup, source, &messages, &mut counts, &mut issues)?;
+    messages::check_reaction_targets(tx, source_id, &mut issues)?;
 
     let diagnostics = diagnostics(sms, sms_path, &backup.root)?;
     counts.issues = issues.len();
@@ -179,6 +180,7 @@ fn import(
         source_id,
         messages_seen = counts.messages_seen,
         messages_added = counts.messages_added,
+        messages_changed = counts.messages_changed,
         issues = counts.issues,
         "import finished"
     );
@@ -190,7 +192,7 @@ fn import(
     })
 }
 
-fn upsert_source(tx: &Transaction, backup: &Backup) -> Result<i64> {
+fn upsert_source(tx: &Transaction, backup: &Backup) -> Result<Source> {
     let i = &backup.info;
     tx.execute(
         "INSERT INTO source (device_id, backup_date, folder, device_name, product_type, ios_version, build_version, is_encrypted, first_imported_at)
@@ -209,9 +211,14 @@ fn upsert_source(tx: &Transaction, backup: &Backup) -> Result<i64> {
         ],
     )?;
     Ok(tx.query_row(
-        "SELECT id FROM source WHERE device_id = ?1 AND backup_date = ?2",
+        "SELECT id, backup_date FROM source WHERE device_id = ?1 AND backup_date = ?2",
         params![i.device_id, i.backup_date],
-        |r| r.get(0),
+        |r| {
+            Ok(Source {
+                id: r.get(0)?,
+                backup_date: r.get(1)?,
+            })
+        },
     )?)
 }
 
@@ -287,7 +294,7 @@ fn import_handles(
 fn import_chats(
     tx: &Transaction,
     sms: &Connection,
-    source_id: i64,
+    source: Source,
     handles: &HandleMap,
     counts: &mut Counts,
     issues: &mut Vec<Issue>,
@@ -307,10 +314,19 @@ fn import_chats(
         "INSERT INTO chat (guid, chat_identifier, service, style, display_name, room_name, group_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT (guid) DO NOTHING",
     )?;
+    let mut update = tx.prepare_cached(
+        "UPDATE chat SET (chat_identifier, service, style, display_name, room_name, group_id)
+             = (?2, ?3, ?4, ?5, ?6, ?7) WHERE guid = ?1",
+    )?;
+    let mut newest_holder = tx.prepare_cached(
+        "SELECT MAX(s.backup_date) FROM source_chat sc JOIN source s ON s.id = sc.source_id
+         WHERE sc.chat_id = ?1",
+    )?;
     let mut find = tx.prepare_cached("SELECT id FROM chat WHERE guid = ?1")?;
     let mut link = tx.prepare_cached(
         "INSERT OR IGNORE INTO source_chat (source_id, source_rowid, chat_id, display_name) VALUES (?1, ?2, ?3, ?4)",
     )?;
+    let source_id = source.id;
     let mut map = ChatMap::new();
     let mut by_identifier: HashMap<String, Vec<(i64, String)>> = HashMap::new();
     let mut rows = read.query([])?;
@@ -320,7 +336,7 @@ fn import_chats(
         let identifier: Option<String> = r.get(2)?;
         let display_name: Option<String> = r.get::<_, Option<String>>(5)?.filter(|n| !n.is_empty());
         counts.chats_seen += 1;
-        counts.chats_added += insert.execute(params![
+        let values = params![
             guid,
             identifier,
             r.get::<_, Option<String>>(3)?,
@@ -328,9 +344,17 @@ fn import_chats(
             display_name,
             r.get::<_, Option<String>>(6)?,
             r.get::<_, Option<String>>(7)?
-        ])?;
+        ];
+        let added = insert.execute(values)?;
+        counts.chats_added += added;
         let id: i64 = find.query_row(params![guid], |r| r.get(0))?;
         link.execute(params![source_id, rowid, id, display_name])?;
+        // The newest backup's name and settings are current (decision 0004).
+        if added == 0
+            && newest_holder.query_row([id], |r| r.get::<_, i64>(0))? <= source.backup_date
+        {
+            update.execute(values)?;
+        }
         map.insert(rowid, id);
         if let Some(ident) = identifier {
             by_identifier.entry(ident).or_default().push((rowid, guid));
@@ -363,234 +387,17 @@ fn import_chats(
     while let Some(r) = rows.next()? {
         let (chat, handle): (i64, i64) = (r.get(0)?, r.get(1)?);
         if let (Some(c), Some(h)) = (map.get(&chat), handles.get(&handle)) {
-            insert.execute(params![c, h, source_id])?;
+            insert.execute(params![c, h, source.id])?;
         }
     }
     Ok(map)
-}
-
-/// Extra per-message fields the crate's `Message` does not carry.
-struct Extras {
-    attributed_body: Option<Vec<u8>>,
-    message_summary_info: Option<Vec<u8>>,
-    payload_data: Option<Vec<u8>>,
-    date_retracted: i64,
-    date_played: i64,
-    is_audio_message: bool,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn import_messages(
-    tx: &Transaction,
-    sms: &Connection,
-    source_id: i64,
-    handles: &HandleMap,
-    chats: &ChatMap,
-    counts: &mut Counts,
-    issues: &mut Vec<Issue>,
-) -> Result<MessageMap> {
-    // Chat membership, read directly so a message in several chats keeps all.
-    let mut chat_join: HashMap<i64, Vec<i64>> = HashMap::new();
-    {
-        let mut stmt =
-            sms.prepare("SELECT message_id, chat_id FROM chat_message_join ORDER BY chat_id")?;
-        let mut rows = stmt.query([])?;
-        while let Some(r) = rows.next()? {
-            chat_join.entry(r.get(0)?).or_default().push(r.get(1)?);
-        }
-    }
-    let mut recoverable: HashMap<i64, i64> = HashMap::new();
-    if !columns(sms, "chat_recoverable_message_join")?.is_empty() {
-        let mut stmt =
-            sms.prepare("SELECT message_id, chat_id FROM chat_recoverable_message_join")?;
-        let mut rows = stmt.query([])?;
-        while let Some(r) = rows.next()? {
-            recoverable.insert(r.get(0)?, r.get(1)?);
-        }
-    }
-
-    let mc = columns(sms, "message")?;
-    let extras_sql = format!(
-        "SELECT {}, {}, {}, {}, {}, {} FROM message WHERE ROWID = ?1",
-        col(&mc, "attributedBody"),
-        col(&mc, "message_summary_info"),
-        col(&mc, "payload_data"),
-        col(&mc, "date_retracted"),
-        col(&mc, "date_played"),
-        col(&mc, "is_audio_message")
-    );
-    let mut extras_stmt = sms.prepare(&extras_sql)?;
-
-    let mut insert = tx.prepare_cached(
-        "INSERT INTO message (
-            guid, chat_id, sender_handle_id, is_from_me, service, sent_at, delivered_at, read_at,
-            edited_at, retracted_at, played_at, text, subject, item_type, group_action_type,
-            other_handle_id, group_title, associated_message_guid, associated_message_type,
-            associated_message_emoji, reply_to_guid, reply_to_part, balloon_bundle_id,
-            expressive_send_style_id, is_audio_message, is_unsent, is_recovered_deleted, first_source_id
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                  ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
-        ON CONFLICT (guid) DO NOTHING",
-    )?;
-    let mut find = tx.prepare_cached("SELECT id FROM message WHERE guid = ?1")?;
-    let mut raw = tx.prepare_cached(
-        "INSERT OR IGNORE INTO message_raw (message_id, attributed_body, message_summary_info, payload_data) VALUES (?1, ?2, ?3, ?4)",
-    )?;
-    let mut in_chat = tx.prepare_cached(
-        "INSERT OR IGNORE INTO message_chat (message_id, chat_id) VALUES (?1, ?2)",
-    )?;
-    let mut held = tx.prepare_cached(
-        "INSERT OR IGNORE INTO message_source (message_id, source_id, source_rowid) VALUES (?1, ?2, ?3)",
-    )?;
-    let mut react = tx.prepare_cached(
-        "INSERT OR IGNORE INTO reaction (message_id, target_guid, target_part, kind, emoji, is_removal) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-    )?;
-
-    let capabilities = Capabilities::determine(sms).context("reading the Messages schema")?;
-    let context = QueryContext::default();
-    let mut stmt =
-        Message::stream_rows(sms, &capabilities, &context).context("querying messages")?;
-    let mut map = MessageMap::new();
-    for row in Message::rows(&mut stmt, [])? {
-        let m = match row {
-            Ok(m) => m,
-            Err(err) => {
-                issues.push(Issue {
-                    kind: issue::DECODE_FAILED,
-                    guid: None,
-                    source_rowid: None,
-                    detail: Some(err.to_string()),
-                });
-                continue;
-            }
-        };
-        counts.messages_seen += 1;
-        let rowid = i64::from(m.rowid);
-        let extras = extras_stmt.query_row([rowid], |r| {
-            Ok(Extras {
-                attributed_body: r.get(0)?,
-                message_summary_info: r.get(1)?,
-                payload_data: r.get(2)?,
-                date_retracted: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                date_played: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                is_audio_message: r.get::<_, Option<bool>>(5)?.unwrap_or(false),
-            })
-        })?;
-
-        let member_of: Vec<i64> = chat_join
-            .get(&rowid)
-            .map(|v| v.iter().filter_map(|c| chats.get(c).copied()).collect())
-            .unwrap_or_default();
-        let recovered_in = recoverable.get(&rowid).and_then(|c| chats.get(c).copied());
-        let chat_id = member_of.first().copied().or(recovered_in);
-        if chat_id.is_none() {
-            issues.push(Issue {
-                kind: issue::ORPHAN_MESSAGE,
-                guid: Some(m.guid.clone()),
-                source_rowid: Some(rowid),
-                detail: None,
-            });
-        }
-
-        let sender = if m.is_from_me {
-            None
-        } else {
-            match m.handle_id.map(i64::from).filter(|&h| h > 0) {
-                Some(h) => match handles.get(&h) {
-                    Some(&id) => Some(id),
-                    None => {
-                        issues.push(Issue {
-                            kind: issue::UNKNOWN_HANDLE,
-                            guid: Some(m.guid.clone()),
-                            source_rowid: Some(rowid),
-                            detail: Some(format!("handle row {h}")),
-                        });
-                        None
-                    }
-                },
-                None => None,
-            }
-        };
-        let other_handle = m
-            .other_handle
-            .map(i64::from)
-            .filter(|&h| h > 0)
-            .and_then(|h| handles.get(&h).copied());
-        let is_unsent = extras.date_retracted != 0 || m.is_fully_unsent();
-
-        let added = insert.execute(params![
-            m.guid,
-            chat_id,
-            sender,
-            m.is_from_me,
-            m.service,
-            apple_to_unix_ns(m.date),
-            apple_to_unix_ns(m.date_delivered),
-            apple_to_unix_ns(m.date_read),
-            apple_to_unix_ns(m.date_edited),
-            apple_to_unix_ns(extras.date_retracted),
-            apple_to_unix_ns(extras.date_played),
-            m.text,
-            m.subject,
-            m.item_type,
-            m.group_action_type,
-            other_handle,
-            m.group_title,
-            m.associated_message_guid,
-            m.associated_message_type,
-            m.associated_message_emoji,
-            m.thread_originator_guid,
-            m.thread_originator_part,
-            m.balloon_bundle_id,
-            m.expressive_send_style_id,
-            extras.is_audio_message,
-            is_unsent,
-            recovered_in.is_some() && member_of.is_empty(),
-            source_id,
-        ])?;
-        counts.messages_added += added;
-        let id: i64 = find.query_row(params![m.guid], |r| r.get(0))?;
-        map.insert(rowid, id);
-        held.execute(params![id, source_id, rowid])?;
-        for c in member_of.iter().copied().chain(recovered_in) {
-            in_chat.execute(params![id, c])?;
-        }
-        if added == 1 {
-            raw.execute(params![
-                id,
-                extras.attributed_body,
-                extras.message_summary_info,
-                extras.payload_data
-            ])?;
-        }
-        if let (Some(kind), Some((part, target))) =
-            (m.associated_message_type, m.clean_associated_guid())
-            && is_reaction(kind)
-        {
-            counts.reactions_added += react.execute(params![
-                id,
-                target,
-                part as i64,
-                kind,
-                m.associated_message_emoji,
-                (3000..4000).contains(&kind)
-            ])?;
-        }
-    }
-    Ok(map)
-}
-
-/// Tapbacks and emoji reactions (2000-2999), their removals (3000-3999), and
-/// stickers placed on a message (1000).
-fn is_reaction(kind: i32) -> bool {
-    kind == 1000 || (2000..4000).contains(&kind)
 }
 
 fn import_attachments(
     tx: &Transaction,
     sms: &Connection,
     backup: &Backup,
-    source_id: i64,
+    source: Source,
     messages: &MessageMap,
     counts: &mut Counts,
     issues: &mut Vec<Issue>,
@@ -618,15 +425,36 @@ fn import_attachments(
         col(&c, "created_date")
     );
     let mut read = sms.prepare(&sql)?;
-    // A later backup that has the file clears `missing`; nothing sets it back.
     let mut insert = tx.prepare_cached(
         "INSERT INTO attachment (guid, filename, transfer_name, uti, mime_type, total_bytes, is_sticker, is_outgoing,
                                  hide_attachment, created_at, missing, first_source_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-         ON CONFLICT (guid) DO UPDATE SET missing = NULL WHERE excluded.missing IS NULL AND attachment.missing IS NOT NULL",
+         ON CONFLICT (guid) DO NOTHING",
+    )?;
+    let mut update = tx.prepare_cached(
+        "UPDATE attachment SET (filename, transfer_name, uti, mime_type, total_bytes, is_sticker, is_outgoing,
+                                hide_attachment, created_at) = (?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         WHERE guid = ?1",
+    )?;
+    let mut newest_holder = tx.prepare_cached(
+        "SELECT MAX(s.backup_date) FROM attachment_source a JOIN source s ON s.id = a.source_id
+         WHERE a.attachment_id = ?1",
+    )?;
+    let mut lower_first = tx.prepare_cached(
+        "UPDATE attachment SET first_source_id = ?2
+         WHERE id = ?1 AND (SELECT backup_date FROM source WHERE id = first_source_id) > ?3",
+    )?;
+    // The file is missing only if no imported backup has it (decision 0004).
+    let mut set_missing = tx.prepare_cached(
+        "UPDATE attachment SET missing = CASE
+             WHEN EXISTS (SELECT 1 FROM attachment_source WHERE attachment_id = ?1 AND present = 1) THEN NULL
+             WHEN EXISTS (SELECT 1 FROM attachment_source WHERE attachment_id = ?1 AND backup_file_id IS NOT NULL)
+                 THEN 'not_in_backup'
+             ELSE 'no_path' END
+         WHERE id = ?1",
     )?;
     let mut find = tx.prepare_cached("SELECT id FROM attachment WHERE guid = ?1")?;
-    let mut exists = tx.prepare_cached("SELECT 1 FROM attachment WHERE guid = ?1")?;
+    let source_id = source.id;
     let mut seen_in = tx.prepare_cached(
         "INSERT OR IGNORE INTO attachment_source (attachment_id, source_id, source_rowid, backup_file_id, present) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
@@ -668,11 +496,7 @@ fn import_attachments(
             (Some(_), true) => None,
         };
         counts.attachment_files_present += usize::from(present);
-        let is_new = exists
-            .query_row(params![guid], |_| Ok(()))
-            .optional()?
-            .is_none();
-        insert.execute(params![
+        let metadata = params![
             guid,
             filename,
             r.get::<_, Option<String>>(3)?,
@@ -686,12 +510,20 @@ fn import_attachments(
             r.get::<_, Option<i64>>(10)?
                 .filter(|&s| s != 0)
                 .map(|s| (s + APPLE_EPOCH_OFFSET) * 1_000_000_000),
-            missing,
-            source_id,
-        ])?;
+        ];
+        let mut values = metadata.to_vec();
+        values.extend([&missing as &dyn rusqlite::ToSql, &source_id]);
+        let is_new = insert.execute(values.as_slice())? == 1;
         counts.attachments_added += usize::from(is_new);
         let id: i64 = find.query_row(params![guid], |r| r.get(0))?;
         seen_in.execute(params![id, source_id, rowid, file_id, present])?;
+        if !is_new {
+            if newest_holder.query_row([id], |r| r.get::<_, i64>(0))? <= source.backup_date {
+                update.execute(metadata)?;
+            }
+            lower_first.execute(params![id, source_id, source.backup_date])?;
+            set_missing.execute([id])?;
+        }
         let msg_ids: Vec<i64> = owners
             .get(&rowid)
             .map(|v| v.iter().filter_map(|m| messages.get(m).copied()).collect())
@@ -707,27 +539,6 @@ fn import_attachments(
         for m in msg_ids {
             belongs.execute(params![m, id])?;
         }
-    }
-    Ok(())
-}
-
-/// Reactions from this backup whose target message is not in the archive.
-fn check_reaction_targets(tx: &Transaction, source_id: i64, issues: &mut Vec<Issue>) -> Result<()> {
-    let mut stmt = tx.prepare(
-        "SELECT m.guid, s.source_rowid FROM reaction r
-         JOIN message m ON m.id = r.message_id
-         JOIN message_source s ON s.message_id = m.id AND s.source_id = ?1
-         WHERE NOT EXISTS (SELECT 1 FROM message t WHERE t.guid = r.target_guid)
-         ORDER BY s.source_rowid",
-    )?;
-    let mut rows = stmt.query([source_id])?;
-    while let Some(r) = rows.next()? {
-        issues.push(Issue {
-            kind: issue::REACTION_TARGET_MISSING,
-            guid: Some(r.get(0)?),
-            source_rowid: Some(r.get(1)?),
-            detail: None,
-        });
     }
     Ok(())
 }

@@ -8,6 +8,7 @@
 
 pub mod addressbook;
 pub mod media;
+pub mod plists;
 pub mod reference;
 pub mod scenario;
 pub mod sms;
@@ -43,6 +44,33 @@ const PRODUCT_VERSION: &str = "26.1";
 const BUILD_VERSION: &str = "23B0";
 const PRODUCT_TYPE: &str = "iPhone14,2";
 
+/// Which backup of the fictional phone to write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Variant {
+    /// The first backup (`scenario::build`).
+    #[default]
+    V1,
+    /// A later backup of the same phone (`scenario::build_v2`).
+    V2,
+}
+
+impl Variant {
+    fn scenario(self) -> Scenario {
+        match self {
+            Variant::V1 => scenario::build(),
+            Variant::V2 => scenario::build_v2(),
+        }
+    }
+
+    /// Unix seconds of the backup.
+    pub fn backup_date(self) -> i64 {
+        match self {
+            Variant::V1 => utc(2025, 5, 1, 9, 30),
+            Variant::V2 => utc(2025, 8, 1, 10, 0),
+        }
+    }
+}
+
 /// Counts an ingester must reproduce from this backup.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct Expected {
@@ -73,6 +101,14 @@ pub struct Expected {
     pub attachments_missing_file: usize,
     pub attachments_without_path: usize,
     pub attachment_bytes_present: u64,
+    /// Attachment rows no message refers to (iOS leftovers).
+    pub attachments_without_message: usize,
+    /// Reactions whose target is not in this backup (iOS leftovers).
+    pub reactions_without_target: usize,
+    /// Entries in every message's edit history (`message_summary_info`).
+    pub edit_events: usize,
+    /// Messages with a link preview in `payload_data`.
+    pub link_previews: usize,
     pub messages_per_chat: BTreeMap<String, usize>,
 }
 
@@ -96,14 +132,19 @@ pub fn normalize_address(raw: &str) -> String {
     }
 }
 
-/// Writes the backup into `out`, which must not exist or be empty.
+/// Writes the first backup into `out`, which must not exist or be empty.
 pub fn generate(out: &Path) -> Result<Expected> {
+    generate_variant(out, Variant::V1)
+}
+
+/// Writes `variant` into `out`, which must not exist or be empty.
+pub fn generate_variant(out: &Path, variant: Variant) -> Result<Expected> {
     if out.exists() && fs::read_dir(out)?.next().is_some() {
         bail!("{} is not empty", out.display());
     }
     fs::create_dir_all(out)?;
-    let s = scenario::build();
-    let backup_date = SystemTime::UNIX_EPOCH + Duration::from_secs(utc(2025, 5, 1, 9, 30) as u64);
+    let s = variant.scenario();
+    let backup_date = SystemTime::UNIX_EPOCH + Duration::from_secs(variant.backup_date() as u64);
 
     let mut files: Vec<(String, String, Vec<u8>)> = Vec::new();
     files.push((
@@ -354,6 +395,24 @@ fn expected(s: &Scenario) -> Expected {
             .iter()
             .map(|a| a.content.as_ref().map_or(0, |c| c.len() as u64))
             .sum(),
+        attachments_without_message: s
+            .attachments
+            .iter()
+            .filter(|a| !s.messages.iter().any(|m| m.attachments.contains(&a.rowid)))
+            .count(),
+        reactions_without_target: s
+            .messages
+            .iter()
+            .filter_map(|m| m.associated_message_guid.as_deref())
+            .map(|g| g.trim_start_matches("p:0/"))
+            .filter(|g| !s.messages.iter().any(|t| t.guid == *g))
+            .count(),
+        edit_events: s.messages.iter().map(|m| m.edit_history.len()).sum(),
+        link_previews: s
+            .messages
+            .iter()
+            .filter(|m| m.link_preview.is_some())
+            .count(),
         messages_per_chat: scenario::per_chat_counts(s),
     }
 }

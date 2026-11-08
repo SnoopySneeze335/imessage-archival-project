@@ -24,6 +24,13 @@ pub struct ArchiveStats {
     pub orphan_messages: u64,
     pub reactions: u64,
     pub replies: u64,
+    /// Content versions of all messages (one per message unless it changed
+    /// between backups).
+    pub message_versions: u64,
+    /// Messages with more than one content version.
+    pub messages_with_versions: u64,
+    /// Entries in parsed edit histories.
+    pub message_edits: u64,
     pub chats: u64,
     pub chats_sharing_identifier: u64,
     pub handles: u64,
@@ -88,6 +95,12 @@ pub fn collect(data_dir: &Path) -> Result<Stats> {
             &conn,
             "SELECT COUNT(*) FROM message WHERE reply_to_guid IS NOT NULL",
         )?,
+        message_versions: n(&conn, "SELECT COUNT(*) FROM message_version")?,
+        messages_with_versions: n(
+            &conn,
+            "SELECT COUNT(*) FROM (SELECT 1 FROM message_version GROUP BY message_id HAVING COUNT(*) > 1)",
+        )?,
+        message_edits: n(&conn, "SELECT COUNT(*) FROM message_edit")?,
         chats: n(&conn, "SELECT COUNT(*) FROM chat")?,
         chats_sharing_identifier: n(
             &conn,
@@ -175,6 +188,9 @@ pub fn render(s: &Stats) -> String {
         ("  not linked to a chat", a.orphan_messages),
         ("  reactions", a.reactions),
         ("  replies", a.replies),
+        ("  content versions", a.message_versions),
+        ("  with more than one version", a.messages_with_versions),
+        ("  edit-history entries", a.message_edits),
         ("Chats", a.chats),
         (
             "  sharing an identifier (extra rows)",

@@ -6,8 +6,8 @@ completes them.
 
 ## Next up
 
-1. **2b: versions and multiple backups** (below).
-2. **Milestone 3: Attachments**: copy files into `/data/blobs`, thumbnails, HEIC and voice-message conversion.
+1. **Milestone 3: Attachments**: copy files into `/data/blobs`, thumbnails, HEIC and voice-message conversion.
+2. **Milestone 4: Viewer**.
 
 ## 1. Foundation
 
@@ -41,10 +41,10 @@ Split into two PRs.
 
 **2b: versions and multiple backups**
 
-- [ ] Fixture: `message_summary_info` edit history and link-preview payloads
-- [ ] Fixture: a second, later backup (new and changed messages, one dropped message, renamed contact)
-- [ ] Changed messages keep every version; messages missing from a newer backup stay
-- [ ] Tests: two backups imported in either order give the same archive
+- [x] Fixture: `message_summary_info` edit history and link-preview payloads
+- [x] Fixture: a second, later backup (new and changed messages, one dropped message, renamed contact)
+- [x] Changed messages keep every version; messages missing from a newer backup stay ([decision 0004](decisions/0004-versions-and-multiple-backups.md))
+- [x] Tests: two backups imported in either order give the same archive
 
 ## 3. Attachments
 
