@@ -69,5 +69,10 @@ which also record which backups held each record.
 - A backup re-imported from another folder path is the same source (the
   first folder is kept).
 - Encrypted backups are refused until Milestone 7 adds `crabapple`.
+- The first import of the real Jan 4, 2026 backup produced the counts
+  recorded in `docs/reference/jan4-baseline.json` (2026-11-08, iOS 26.1,
+  `imessage-database` 5.0.1). They match SPEC.md's messages, chats and
+  attachment records. Any change to these rules is checked against that
+  baseline (see `docs/reference/README.md`).
 - Changing a key, or letting an import modify or delete stored rows beyond
   what is described here, needs a new decision record.

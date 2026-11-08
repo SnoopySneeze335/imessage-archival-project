@@ -9,9 +9,6 @@ completes them.
 1. **2b: versions and multiple backups** (below).
 2. **Milestone 3: Attachments**: copy files into `/data/blobs`, thumbnails, HEIC and voice-message conversion.
 
-Waiting on the user: the Milestone 2 count check against the Jan 4 backup (see
-the 2a checklist).
-
 ## 1. Foundation
 
 - [x] Repository, GPL-3.0 license, README
@@ -40,7 +37,7 @@ Split into two PRs.
 - [x] Import runs and issues recorded; running twice changes nothing; a failed run rolls back
 - [x] `imessage-ap stats --data <dir>`: counts only, beside imessage-database's own diagnostics
 - [x] Fixture tests: first import, re-import, reactions, orphans, missing files, read-only backup, encrypted refused
-- [ ] Check: Jan 4 backup yields 371,159 messages, 1,002 raw chats, 27,694 attachment records (run by the user, counts only)
+- [x] Check: Jan 4 backup yields 371,159 messages, 1,002 raw chats, 27,694 attachment records: matched on 2026-11-08; baseline in [`docs/reference/jan4-baseline.json`](reference/jan4-baseline.json) ([notes](reference/README.md#count-check-baseline))
 
 **2b: versions and multiple backups**
 
