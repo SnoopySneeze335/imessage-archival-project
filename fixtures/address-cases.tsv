@@ -1,0 +1,14 @@
+# Handle address normalization cases: raw<TAB>normalized.
+# Fictional numbers only (555-0100..555-0199; +44 20 7946 0xxx is Ofcom's
+# drama range) and example.com addresses.
+(206) 555-0101	+12065550101
+206-555-0101	+12065550101
+206.555.0101	+12065550101
+2065550101	+12065550101
+1 206 555 0101	+12065550101
++1 206 555 0101	+12065550101
++12065550101	+12065550101
++44 20 7946 0958	+442079460958
+ Avery.Quill@Example.com 	avery.quill@example.com
+55501	55501
+urn:biz:0000-fixture	urn:biz:0000-fixture

@@ -8,8 +8,10 @@
 
 pub mod addressbook;
 pub mod media;
+pub mod reference;
 pub mod scenario;
 pub mod sms;
+pub mod typedstream;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -37,8 +39,8 @@ pub const EXPECTED_FILE: &str = "fixture-expected.json";
 /// Fictional device identity.
 const UDID: &str = "FIXTURE0-0000000000000001";
 const DEVICE_NAME: &str = "Fixture iPhone";
-const PRODUCT_VERSION: &str = "18.2";
-const BUILD_VERSION: &str = "22C152";
+const PRODUCT_VERSION: &str = "26.1";
+const BUILD_VERSION: &str = "23B0";
 const PRODUCT_TYPE: &str = "iPhone14,2";
 
 /// Counts an ingester must reproduce from this backup.
@@ -54,6 +56,8 @@ pub struct Expected {
     pub edited: usize,
     pub unsent: usize,
     pub group_events: usize,
+    /// Messages whose text is only in `attributedBody` (`text` is NULL).
+    pub text_only_in_attributed_body: usize,
     pub chats: usize,
     /// Chats beyond the first that share a `chat_identifier` (one address,
     /// several chat rows); these must merge into one conversation.
@@ -105,12 +109,14 @@ pub fn generate(out: &Path) -> Result<Expected> {
     files.push((
         SMS_DB.0.into(),
         SMS_DB.1.into(),
-        sqlite_bytes(out, |c| sms::write(c, &s))?,
+        sqlite_bytes(out, reference::SMS_SCHEMA, "sms.db", |c| sms::write(c, &s))?,
     ));
     files.push((
         ADDRESS_BOOK_DB.0.into(),
         ADDRESS_BOOK_DB.1.into(),
-        sqlite_bytes(out, |c| addressbook::write(c, &s))?,
+        sqlite_bytes(out, reference::ADDRESS_BOOK_SCHEMA, "AddressBook", |c| {
+            addressbook::write(c, &s)
+        })?,
     ));
     for a in &s.attachments {
         if let (Some(path), Some(content)) = (&a.filename, &a.content) {
@@ -163,9 +169,12 @@ pub fn generate(out: &Path) -> Result<Expected> {
     Ok(expected)
 }
 
-/// Builds a SQLite database in a scratch file and returns its bytes.
+/// Builds a SQLite database in a scratch file, checks its schema against the
+/// reference dump, and returns its bytes.
 fn sqlite_bytes(
     out: &Path,
+    schema: &str,
+    label: &str,
     fill: impl FnOnce(&Connection) -> rusqlite::Result<()>,
 ) -> Result<Vec<u8>> {
     let tmp = out.join(".fixture-tmp.sqlite");
@@ -173,8 +182,9 @@ fn sqlite_bytes(
     {
         let conn = Connection::open(&tmp)?;
         conn.execute_batch("PRAGMA journal_mode = DELETE;")?;
-        fill(&conn).context("writing fixture database")?;
+        fill(&conn).with_context(|| format!("writing fixture {label}"))?;
     }
+    reference::verify(&Connection::open(&tmp)?, schema, label)?;
     let bytes = fs::read(&tmp)?;
     fs::remove_file(&tmp)?;
     Ok(bytes)
@@ -316,6 +326,7 @@ fn expected(s: &Scenario) -> Expected {
             .count(),
         unsent: s.messages.iter().filter(|m| m.date_retracted != 0).count(),
         group_events: s.messages.iter().filter(|m| m.item_type != 0).count(),
+        text_only_in_attributed_body: s.messages.iter().filter(|m| m.text_only_in_body).count(),
         chats: s.chats.len(),
         duplicated_chats: identifiers
             .values()

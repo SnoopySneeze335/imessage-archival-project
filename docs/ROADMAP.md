@@ -4,6 +4,14 @@ Milestones from [SPEC.md](SPEC.md). Each one ends with something runnable.
 Checks against the real backup use counts only. Tick items in the PR that
 completes them.
 
+## Next up
+
+1. **2b: versions and multiple backups** (below).
+2. **Milestone 3: Attachments**: copy files into `/data/blobs`, thumbnails, HEIC and voice-message conversion.
+
+Waiting on the user: the Milestone 2 count check against the Jan 4 backup (see
+the 2a checklist).
+
 ## 1. Foundation
 
 - [x] Repository, GPL-3.0 license, README
@@ -20,14 +28,26 @@ completes them.
 
 ## 2. Ingester
 
-- [ ] Add `imessage-database` and `crabapple`, pinned; confirm they read the fixture backup
-- [ ] Fixture: `attributedBody` typedstream text, `message_summary_info` edit history, link-preview payloads
+Split into two PRs.
+
+**2a: fixture parity and core ingest**
+
+- [x] Fixture generator builds sms.db and AddressBook from the real iOS 26.1 schemas (`docs/reference/`), verified exactly
+- [x] Fixture: `attributedBody` typedstream text, including messages with text only there
+- [x] Add `imessage-database`, pinned; confirm it reads the fixture backup
+- [x] archive.db schema: source, handle, chat, message, reaction, attachment, import_run, import_issue
+- [x] `imessage-ap ingest --backup <dir> --data <dir>`: strictly read-only, upserts by GUID
+- [x] Import runs and issues recorded; running twice changes nothing; a failed run rolls back
+- [x] `imessage-ap stats --data <dir>`: counts only, beside imessage-database's own diagnostics
+- [x] Fixture tests: first import, re-import, reactions, orphans, missing files, read-only backup, encrypted refused
+- [ ] Check: Jan 4 backup yields 371,159 messages, 1,002 raw chats, 27,694 attachment records (run by the user, counts only)
+
+**2b: versions and multiple backups**
+
+- [ ] Fixture: `message_summary_info` edit history and link-preview payloads
 - [ ] Fixture: a second, later backup (new and changed messages, one dropped message, renamed contact)
-- [ ] archive.db schema: source, handle, chat, message, reaction, attachment, import_run, import_issue
-- [ ] `imessage-ap ingest <backup>` upserts by GUID, keeps versions of changed messages
-- [ ] Import report with counts and issues; running twice changes nothing
-- [ ] Fixture tests match `fixture-expected.json`
-- [ ] Check: Jan 4 backup yields 371,159 messages, 1,002 raw chats, 27,694 attachment records
+- [ ] Changed messages keep every version; messages missing from a newer backup stay
+- [ ] Tests: two backups imported in either order give the same archive
 
 ## 3. Attachments
 

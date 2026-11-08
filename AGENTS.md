@@ -13,14 +13,14 @@ and shows them in a fast, iMessage-like web app. It runs as one Docker
 container, for one user, on a home server reachable over Tailscale. No data
 ever leaves that server.
 
-**Milestone in progress: 1, Foundation** (see the roadmap). Work only on the
+**Milestone in progress: 2, Ingester** (2a done; 2b next; see the roadmap). Work only on the
 current milestone unless told otherwise.
 
 ## Stack
 
 | Layer | Choice |
 | --- | --- |
-| Backup reading | `imessage-database` and `crabapple` crates (added in Milestone 2) |
+| Backup reading | `imessage-database` crate (`crabapple` for encrypted backups in Milestone 7) |
 | Server, ingester, CLI | Rust 2024, axum, rusqlite (`crates/imessage-ap`) |
 | Database | SQLite in WAL mode, FTS5 for search |
 | Media | ImageMagick with libheif (`libheif-plugin-libde265`), ffmpeg |
@@ -31,7 +31,7 @@ current milestone unless told otherwise.
 ## Layout
 
 ```
-crates/imessage-ap/   server + CLI (serve, ingest, healthcheck)
+crates/imessage-ap/   server + CLI (serve, ingest, stats, healthcheck)
 fixtures/generator/   make-fixture: builds the fake iPhone backup
 fixtures/media/       tiny invented media the generator embeds
 web/                  React app, built to web/dist
@@ -40,6 +40,7 @@ scripts/cloud-setup.sh  toolchain setup for cloud sessions
 docker/               container entrypoint
 docs/                 SPEC.md, ROADMAP.md
 docs/decisions/       decision records (read before changing what they cover)
+docs/reference/       real iOS schemas (no data); the fixture must match them
 ```
 
 ## Commands
@@ -56,6 +57,10 @@ cargo run -p fixture-gen -- --out fixtures/out/backup-v1 --force
 
 # Server against the built web app
 cargo run -p imessage-ap -- serve --port 8080 --data ./data --web web/dist
+
+# Import the fixture and print counts
+cargo run -p imessage-ap -- ingest --backup fixtures/out/backup-v1 --data ./data
+cargo run -p imessage-ap -- stats --data ./data
 
 # Web
 cd web && npm ci && npm run typecheck && npm run build   # npm run dev proxies /api to :8080
@@ -118,6 +123,8 @@ what they cover; to reverse one, add a new record that supersedes it.
 
 - [0001](docs/decisions/0001-runtime-image.md): Ubuntu 24.04 runtime image,
   `libheif-plugin-libde265`, and the build-time HEIC decode check.
+- [0002](docs/decisions/0002-archive-identity.md): archive.db identity keys,
+  append-only imports, and strictly read-only backup access.
 
 ## Dependencies
 
