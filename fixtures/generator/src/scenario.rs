@@ -72,11 +72,27 @@ pub struct Message {
     pub thread_originator_guid: Option<String>,
     pub thread_originator_part: Option<String>,
     pub attachments: Vec<i64>,
+    /// Earlier and current versions of the text, as (Unix seconds, text),
+    /// the original first; stored in `message_summary_info` (`ec`).
+    pub edit_history: Vec<(i64, String)>,
+    /// A link preview stored in `payload_data`.
+    pub link_preview: Option<LinkPreview>,
     /// Chat the message belongs to; `None` for the orphan case.
     pub chat: Option<i64>,
     /// Deleted on the phone but still recoverable (iOS 16+).
     pub recoverable_in: Option<i64>,
 }
+
+#[derive(Debug, Clone)]
+pub struct LinkPreview {
+    pub url: &'static str,
+    pub title: &'static str,
+    pub summary: &'static str,
+    pub site_name: &'static str,
+}
+
+/// `balloon_bundle_id` of a link-preview message.
+pub const URL_BALLOON: &str = "com.apple.messages.URLBalloonProvider";
 
 #[derive(Debug, Clone)]
 pub struct Attachment {
@@ -200,7 +216,9 @@ impl Builder {
     }
 
     fn push(&mut self, chat: Option<i64>, from: From, text: Option<String>) -> usize {
-        let rowid = self.s.messages.len() as i64 + 1;
+        // Max + 1, like SQLite's ROWID, so a later backup with a deleted
+        // message never reuses a number.
+        let rowid = self.s.messages.iter().map(|m| m.rowid).max().unwrap_or(0) + 1;
         let (service, direct_handle) = match chat {
             Some(c) => {
                 let chat = self.chat(c);
@@ -309,6 +327,24 @@ impl Builder {
         sticker: bool,
     ) -> usize {
         let i = self.push(Some(chat), from, Some("\u{FFFC}".to_owned()));
+        let arowid = self.attachment(name, mime, uti, content, with_path, sticker, from);
+        self.s.messages[i].attachments.push(arowid);
+        i
+    }
+
+    /// An attachment row with no message, as iOS leaves behind when a message
+    /// is deleted (`message_attachment_join` cascades; `attachment` does not).
+    #[allow(clippy::too_many_arguments)]
+    fn attachment(
+        &mut self,
+        name: &str,
+        mime: &'static str,
+        uti: &'static str,
+        content: Option<Vec<u8>>,
+        with_path: bool,
+        sticker: bool,
+        from: From,
+    ) -> i64 {
         let arowid = self.s.attachments.len() as i64 + 1;
         let aguid = guid(0xA77A_0000, arowid as usize);
         let dir = format!("{:02x}/{:02}", (arowid * 37) % 256, arowid % 100);
@@ -328,8 +364,15 @@ impl Builder {
             created: self.now,
             content,
         });
-        self.s.messages[i].attachments.push(arowid);
-        i
+        arowid
+    }
+
+    fn find(&mut self, text: &str) -> &mut Message {
+        self.s
+            .messages
+            .iter_mut()
+            .find(|m| m.text.as_deref() == Some(text))
+            .unwrap_or_else(|| panic!("no message {text:?}"))
     }
 }
 
@@ -521,6 +564,10 @@ pub fn build() -> Scenario {
         let m = b.s.messages.iter_mut().find(|m| m.guid == edited).unwrap();
         m.date_edited = m.date + 90;
         m.text_only_in_body = true;
+        m.edit_history = vec![
+            (m.date, "See you at 10 instead".to_owned()),
+            (m.date + 90, "See you at 10:30 instead".to_owned()),
+        ];
     }
     let unsent = b.push(Some(1), me, None);
     b.s.messages[unsent].date_retracted = b.s.messages[unsent].date + 30;
@@ -586,6 +633,8 @@ pub fn build() -> Scenario {
     b.at(2024, 1, 2, 8, 15);
     b.say(3, avery_mail, "Sending from my laptop — happy new year!");
     b.say(3, me, "Happy new year!! 🎉");
+    b.say(3, avery_mail, TRAIL_LINK.url);
+    b.find(TRAIL_LINK.url).link_preview = Some(TRAIL_LINK);
 
     // Chat 4: Bram, long thread of filler across 2024 for windowing and stats.
     b.at(2024, 2, 1, 7, 0);
@@ -708,6 +757,11 @@ pub fn build() -> Scenario {
         false,
     );
     b.say(11, me, "Résumé attached earlier, let me know!");
+    // Sent minutes before backup 1 (09:30); v2 edits one and unsends the other.
+    b.at(2025, 5, 1, 9, 25);
+    b.say(11, me, "Meet at the north trailhead");
+    b.at(2025, 5, 1, 9, 29);
+    b.say(11, me, "Wrong photo, ignore that");
 
     // Chat 12: the business from the address book.
     b.at(2025, 3, 3, 16, 0);
@@ -726,6 +780,86 @@ pub fn build() -> Scenario {
         Some("Orphaned message with no chat".to_owned()),
     );
 
+    // iOS leftovers (decision 0003): an attachment whose message was deleted,
+    // and a reaction whose target was deleted.
+    b.attachment(
+        "IMG_0007.JPG",
+        "image/jpeg",
+        "public.jpeg",
+        None,
+        true,
+        false,
+        avery,
+    );
+    b.at(2025, 4, 2, 8, 0);
+    b.react(12, me, &guid(0xDE1E_7ED0, 1), Tapback::Liked, false);
+
+    b.s
+}
+
+const TRAIL_LINK: LinkPreview = LinkPreview {
+    url: "https://trails.example.org/ridge-loop",
+    title: "Ridge Loop conditions",
+    summary: "Snow above 4,000 ft; microspikes recommended.",
+    site_name: "Example Trails",
+};
+
+/// GUID of the message `build()` drops from the second backup.
+pub fn dropped_in_v2(s: &Scenario) -> String {
+    s.messages
+        .iter()
+        .filter(|m| m.chat == Some(4))
+        .nth(10)
+        .expect("chat 4 has filler")
+        .guid
+        .clone()
+}
+
+/// A second, later backup of the same phone (decision 0004): new messages, an
+/// edit and an unsend made after backup 1, a status change, one message
+/// deleted from the phone, a renamed group and contact, and a file that
+/// backup 1 lacked.
+pub fn build_v2() -> Scenario {
+    let mut b = Builder { s: build(), now: 0 };
+    let dropped = dropped_in_v2(&b.s);
+    let (avery, esme, me) = (From::H(1), From::H(7), From::Me);
+
+    let m = b.find("Meet at the north trailhead");
+    m.date_edited = m.date + 8 * 60;
+    m.text = Some("Meet at the south trailhead".to_owned());
+    m.edit_history = vec![
+        (m.date, "Meet at the north trailhead".to_owned()),
+        (m.date_edited, "Meet at the south trailhead".to_owned()),
+    ];
+    let m = b.find("Wrong photo, ignore that");
+    m.date_retracted = m.date + 110;
+    m.date_edited = m.date_retracted;
+    m.text = None;
+    let m = b.find("Delivered but never read");
+    m.is_read = true;
+    m.date_read = m.date + 86_400;
+
+    b.s.chats[5].display_name = Some("Summit Society".to_owned());
+    b.s.contacts[1].last = Some("Okonkwo-Reyes");
+    let heic =
+        b.s.attachments
+            .iter_mut()
+            .find(|a| a.transfer_name == "IMG_0002.HEIC")
+            .unwrap();
+    heic.content = Some(HEIC_SAMPLE.to_vec());
+
+    b.at(2025, 6, 10, 18, 0);
+    b.system(6, From::H(5), 2, 0, 0, Some("Summit Society"));
+    b.say(6, From::H(4), "Love the new name");
+    b.at(2025, 7, 4, 11, 0);
+    let target = b.find("Résumé attached earlier, let me know!").guid.clone();
+    b.react(11, esme, &target, Tapback::Loved, false);
+    b.say(11, esme, "Got it, looks great");
+    b.at(2025, 7, 20, 9, 0);
+    b.say(1, avery, "Back in town next week!");
+    b.say(1, me, "Café on Saturday again?");
+
+    b.s.messages.retain(|m| m.guid != dropped);
     b.s
 }
 

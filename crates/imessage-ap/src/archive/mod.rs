@@ -10,7 +10,10 @@ pub const ARCHIVE_DB: &str = "archive.db";
 
 /// Schema migrations, applied in order. `PRAGMA user_version` records how many
 /// have run. Never edit a released migration; add a new one.
-const MIGRATIONS: &[&str] = &[include_str!("0001_initial.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("0001_initial.sql"),
+    include_str!("0002_versions.sql"),
+];
 
 /// Path of archive.db inside `data_dir`.
 pub fn path(data_dir: &Path) -> PathBuf {
@@ -67,6 +70,13 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
     Ok(())
+}
+
+/// The migration scripts, oldest first. Tests use this to build an archive at
+/// an older schema version.
+#[doc(hidden)]
+pub fn migrations() -> &'static [&'static str] {
+    MIGRATIONS
 }
 
 /// Number of schema migrations this build knows.

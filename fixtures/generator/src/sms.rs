@@ -3,7 +3,22 @@
 
 use rusqlite::{Connection, params};
 
-use crate::scenario::{OWNER_EMAIL, OWNER_PHONE, SERVICE_SMS, Scenario, apple_ns, apple_s};
+use crate::scenario::{
+    Message, OWNER_EMAIL, OWNER_PHONE, SERVICE_SMS, Scenario, URL_BALLOON, apple_ns, apple_s,
+};
+
+/// `message_summary_info` for edited and unsent messages; NULL otherwise.
+fn summary_info(m: &Message) -> Option<Vec<u8>> {
+    let unsent = m.date_retracted != 0;
+    (unsent || !m.edit_history.is_empty()).then(|| {
+        let history: Vec<(i64, &str)> = m
+            .edit_history
+            .iter()
+            .map(|(at, t)| (*at, t.as_str()))
+            .collect();
+        crate::plists::summary_info(&history, unsent)
+    })
+}
 
 pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
     crate::reference::create_tables(conn, crate::reference::SMS_SCHEMA)?;
@@ -87,9 +102,9 @@ pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
                 associated_message_guid, associated_message_type, associated_message_range_location,
                 associated_message_range_length, associated_message_emoji, destination_caller_id,
                 thread_originator_guid, thread_originator_part, date_retracted, date_edited, part_count, sort_id,
-                attributedBody
+                attributedBody, balloon_bundle_id, message_summary_info, payload_data
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
-                      ?22, ?23, 0, ?24, ?25, ?26, ?27, ?28, ?29, ?30, 1, 0, ?31)",
+                      ?22, ?23, 0, ?24, ?25, ?26, ?27, ?28, ?29, ?30, 1, 0, ?31, ?32, ?33, ?34)",
             params![
                 m.rowid,
                 m.guid,
@@ -122,6 +137,11 @@ pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
                 opt(m.date_retracted),
                 opt(m.date_edited),
                 m.text.as_deref().map(crate::typedstream::attributed_body),
+                m.link_preview.as_ref().map(|_| URL_BALLOON),
+                summary_info(m),
+                m.link_preview
+                    .as_ref()
+                    .map(|l| crate::plists::link_preview(l.url, l.title, l.summary, l.site_name)),
             ],
         )?;
         if let Some(chat) = m.chat {

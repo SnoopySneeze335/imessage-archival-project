@@ -1,6 +1,7 @@
 # 0002. archive.db identity, append-only imports, read-only backups
 
-- Status: accepted
+- Status: accepted; the append-only update rules are superseded by
+  [0004](0004-versions-and-multiple-backups.md)
 - Date: 2026-11-08
 - Milestone: 2a, Ingester
 
