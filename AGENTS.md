@@ -123,6 +123,8 @@ what they cover; to reverse one, add a new record that supersedes it.
   `libheif-plugin-libde265`, and the build-time HEIC decode check.
 - [0002](docs/decisions/0002-archive-identity.md): archive.db identity keys,
   append-only imports, and strictly read-only backup access.
+- [0003](docs/decisions/0003-count-check-differences.md): why the archive's
+  handle and chat counts differ from the crate's, and the Jan 4 leftovers.
 
 ## Dependencies
 

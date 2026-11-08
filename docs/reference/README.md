@@ -38,10 +38,10 @@ difference must be explained in the PR. An expected change, such as a newer
 crate decoding more, means replacing this file in that PR and updating the
 table above.
 
-The headline counts match the diagnostics in SPEC.md. They came from an
+The headline counts match the diagnostics SPEC.md first listed, which came from an
 unknown legacy imessage-exporter build:
 
-| Measure | SPEC.md (legacy build) | Baseline (5.0.1) |
+| Measure | Legacy build (old SPEC.md) | Baseline (5.0.1) |
 | --- | --- | --- |
 | Messages | 371,159 | 371,159 |
 | Not linked to a chat | 33 | 33 (26 orphans + 7 recently deleted) |
@@ -50,18 +50,19 @@ unknown legacy imessage-exporter build:
 | Files missing (incl. no path) | 2,654 | 2,654 |
 | No path | 2 | 2 |
 | Attachments with a file | (25,040 implied) | 25,040 |
-| Attachment data referenced / on disk | 67.54 / 45.72 GB | 67.53 / 45.71 GiB (72.52 / 49.09 GB) |
+| Attachment data referenced / on disk | 67.54 / 45.72 GiB | 67.53 / 45.71 GiB (72.52 / 49.09 GB) |
 
 Three handle and chat counts differ. Both builds read the same data but group
 it differently:
 
-| Measure | SPEC.md (legacy build) | Baseline (5.0.1) |
+| Measure | Legacy build (old SPEC.md) | Baseline (5.0.1) |
 | --- | --- | --- |
 | Handle rows | 1,432 | 1,431 |
 | Duplicated chats | 23 | 31 |
 | Handles with more than one ID | 87 | 313 |
 
-Duplicate handles removed are 334 in both. None of the three differences
-blocks Milestone 2. Chat and handle merging is built and checked in
-Milestone 6 (Contacts), so these numbers are rechecked there. The data sizes
-in SPEC.md are binary gigabytes (GiB); `imessage-ap stats` prints decimal GB.
+Duplicate handles removed are 334 in both. The differences, and the archive's
+own unique-address and duplicate-chat counts, are explained in
+[decision 0003](../decisions/0003-count-check-differences.md); SPEC.md now
+shows the 5.0.1 figures. The legacy data sizes were binary gigabytes (GiB);
+`imessage-ap stats` and SPEC.md use decimal GB.
