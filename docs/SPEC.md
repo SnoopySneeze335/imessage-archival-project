@@ -11,7 +11,7 @@ v1 commits to:
 - Lossless import of the Jan 4 backup: every message, reaction, reply, edit and attachment it holds.
 - Repeatable imports of future backups, deduplicated by Apple's message ID; nothing is deleted because a newer backup lacks it.
 - An iMessage-like viewer with search under 200 ms across the whole archive.
-- Contact management that turns 1,098 raw phone numbers and emails into named people.
+- Contact management that turns 1,097 raw phone numbers and emails into named people.
 - A statistics dashboard, plus a JSON export so the archive outlives the app.
 - One Docker container on Unraid, single user, reachable over Tailscale, with no data leaving the server.
 
@@ -27,23 +27,23 @@ The source of truth is local iPhone backups, read directly. The CopyTrans PDF ex
 | Older backups | Still on the PC; not needed for history, but may hold some of the missing attachment files |
 | Existing exports | imessage-exporter HTML export (`imessage-extractor-full`) and CopyTrans PDFs; kept as a fallback, never imported |
 
-Diagnostics for the Jan 4 backup, from the imessage-exporter legacy build:
+Diagnostics for the Jan 4 backup, from `imessage-database` 5.0.1 (count check of 2026-11-08; differences from the earlier legacy build are explained in [decision 0003](decisions/0003-count-check-differences.md)):
 
 | Measure | Value |
 | --- | --- |
 | Messages | 371,159 (33 not linked to a chat) |
-| Chats | 1,002 (23 duplicated) |
-| Handles (phone numbers and emails) | 1,432 rows; 1,098 unique after removing 334 duplicates; 87 with more than one ID |
-| Handles with a name in the backup's address book | 279 of 1,098 (25%) |
+| Chats | 1,002 (31 duplicated) |
+| Handles (phone numbers and emails) | 1,431 rows; 1,097 unique after removing 334 duplicates; 313 people with more than one ID |
+| Handles with a name in the backup's address book | 279 of 1,098 (25%; legacy build, rechecked in Milestone 6) |
 | Attachment records | 27,694 |
-| Attachment data | 67.54 GB referenced, 45.72 GB present on disk |
+| Attachment data | 72.52 GB referenced, 49.09 GB present on disk |
 | Missing attachment files | 2,654 (10%): 2,652 not found, 2 with no path |
 | Messages database size | 435 MB |
 
 What these numbers decide:
 
 - Search volume is small: about 371K messages fits comfortably in SQLite with full-text indexes.
-- /data needs about 46 GB for original attachments plus derivatives; plan for 60 GB.
+- /data needs about 49 GB for original attachments plus derivatives; plan for 60 GB.
 - Three in four handles have no name, so unknown-number triage is a core feature.
 - Duplicate handles and chats must merge into one conversation per person or group.
 - Missing files are recorded and shown as placeholders; importing another backup that has them fills the gap.
@@ -76,7 +76,7 @@ One Rust service handles importing, storage and the API; a TypeScript single-pag
 | Charts | Apache ECharts | Heatmaps, timelines and bars for the dashboard |
 | Packaging | Multi-stage Docker build, amd64 | Unraid runs on x86; arm64 can come later |
 
-Crate versions are pinned. The diagnostics came from an unknown legacy build, so the ingester milestone first confirms the current crates read the Jan 4 backup with the same counts.
+Crate versions are pinned. The ingester milestone confirmed that `imessage-database` 5.0.1 reads the Jan 4 backup with the same message, chat and attachment counts as the earlier legacy build.
 
 &#91;embedded content: architecture · 3 processes, 5 stores in /data\]
 
@@ -131,7 +131,7 @@ The review screen flags problems without blocking the import:
 - Missing attachment files, grouped by chat (2,654 expected for the Jan 4 backup).
 - Unknown handles, sorted by message count, linked to contact triage.
 - Messages not linked to a chat (33 expected).
-- Proposed merges for duplicated chats (23 expected).
+- Proposed merges for duplicated chats (31 expected).
 - Name conflicts between address-book snapshots.
 - Anything the parser could not decode, with its GUID and source.
 
@@ -153,7 +153,7 @@ Contact management screens:
 - **Businesses and short codes**: mark a handle as one so it leaves the unknown list.
 - **People**: merge and split people; resolve conflicts when two snapshots disagree.
 - **vCard import**: .vcf files as an extra source of names.
-- **Chat merging**: the 23 duplicated chats are proposed for merging; the user can merge or split any conversation.
+- **Chat merging**: the 31 duplicated chats are proposed for merging; the user can merge or split any conversation.
 
 ## Search
 
@@ -290,7 +290,7 @@ v2: per-conversation stats, static HTML export, missing-file recovery from older
 
 v1 is done when:
 
-- [ ] Importing the Jan 4 backup a second time changes nothing.
+- [x] Importing the Jan 4 backup a second time changes nothing.
 - [ ] Raw message, chat and attachment counts match the diagnostics above.
 - [ ] Every message renders without errors, and missing files show placeholders.
 - [ ] Search p95 is under 200 ms on snoopyserver.
@@ -305,7 +305,7 @@ The largest risk is losing the Jan 4 backup before it has a second copy; everyth
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | Only one copy of the pre-2026 history exists | Permanent loss | Copy to snoopyserver and offsite before development starts |
-| Diagnostics came from an unknown legacy build | Current crates might read the backup differently | Milestone 2 compares counts with the current release first |
+| Diagnostics came from an unknown legacy build | Current crates might read the backup differently | Checked in Milestone 2: 5.0.1 matches; differences in grouping explained in decision 0003 |
 | Future iOS versions change the Messages database | New backups fail to import or lose fields | Pinned crates; each import records its versions; Reprocess all after upgrades |
 | 2,654 attachment files (10%) are missing | Gaps in photos and media | Placeholders now; check older backups in v2 |
 | 75% of handles have no name | Long manual triage | Triage sorted by message count, so the most active numbers get named first |

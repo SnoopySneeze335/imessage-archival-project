@@ -82,7 +82,7 @@ Split into two PRs.
 - [ ] Businesses and short codes
 - [ ] Merge and split people; date-ranged handle links
 - [ ] vCard import
-- [ ] Chat merging (the 23 duplicated chats proposed)
+- [ ] Chat merging (the 31 duplicated chats proposed; definition in [decision 0003](decisions/0003-count-check-differences.md))
 
 ## 7. Import UI
 
@@ -111,7 +111,7 @@ Split into two PRs.
 
 ## v1 is done when
 
-- [ ] Importing the Jan 4 backup a second time changes nothing
+- [x] Importing the Jan 4 backup a second time changes nothing: run 2 added 0 records (2026-11-08)
 - [ ] Raw message, chat and attachment counts match the diagnostics
 - [ ] Every message renders without errors, and missing files show placeholders
 - [ ] Search p95 is under 200 ms on snoopyserver
