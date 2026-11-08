@@ -36,10 +36,25 @@ enum Command {
         #[arg(long, env = "IMESSAGE_AP_PORT", default_value_t = 8080)]
         port: u16,
     },
-    /// Import an iPhone backup folder into the archive (Milestone 2).
+    /// Import an iPhone backup folder into the archive. The backup is opened
+    /// strictly read-only; running it again adds nothing.
     Ingest {
-        /// Path to the backup folder (the one containing Manifest.db).
+        /// Backup folder (the one containing Manifest.db).
+        #[arg(long)]
         backup: PathBuf,
+        /// Data directory; archive.db is created here.
+        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
+        data: PathBuf,
+    },
+    /// Print archive counts (no message content) for comparison with the
+    /// backup diagnostics in docs/SPEC.md.
+    Stats {
+        /// Data directory containing archive.db.
+        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
+        data: PathBuf,
+        /// Print JSON instead of a table.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -82,11 +97,44 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Healthcheck { port } => healthcheck(port),
-        Command::Ingest { backup } => {
-            anyhow::bail!(
-                "ingest is not implemented yet (Milestone 2); backup: {}",
-                backup.display()
-            )
+        Command::Ingest { backup, data } => {
+            let summary = imessage_ap::ingest::run(&backup, &data)?;
+            let c = &summary.counts;
+            println!(
+                "Import run {} (backup {}) succeeded",
+                summary.run_id, summary.source_id
+            );
+            println!(
+                "  handles      {:>9} seen {:>9} added",
+                c.handles_seen, c.handles_added
+            );
+            println!(
+                "  chats        {:>9} seen {:>9} added",
+                c.chats_seen, c.chats_added
+            );
+            println!(
+                "  messages     {:>9} seen {:>9} added",
+                c.messages_seen, c.messages_added
+            );
+            println!("  reactions    {:>9} added", c.reactions_added);
+            println!(
+                "  attachments  {:>9} seen {:>9} added {:>9} with file",
+                c.attachments_seen, c.attachments_added, c.attachment_files_present
+            );
+            println!("  issues       {:>9}", c.issues);
+            for (kind, n) in &summary.issues_by_kind {
+                println!("    {kind:<32}{n:>9}");
+            }
+            Ok(())
+        }
+        Command::Stats { data, json } => {
+            let stats = imessage_ap::stats::collect(&data)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                print!("{}", imessage_ap::stats::render(&stats));
+            }
+            Ok(())
         }
     }
 }

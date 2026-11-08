@@ -1,5 +1,6 @@
-//! AddressBook.sqlitedb: the subset of the iOS contacts database that holds
-//! names, organizations, phone numbers and emails.
+//! AddressBook.sqlitedb, built from the real iOS 26.1 schema
+//! (`docs/reference/addressbook-schema.sql`). Only the tables that hold
+//! names, organizations, phone numbers and emails get rows.
 
 use rusqlite::{Connection, params};
 
@@ -9,32 +10,8 @@ use crate::scenario::{Scenario, apple_s, utc};
 pub const PROPERTY_PHONE: i64 = 3;
 pub const PROPERTY_EMAIL: i64 = 4;
 
-const SCHEMA: &str = r"
-CREATE TABLE ABPerson (
-    ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
-    First TEXT, Last TEXT, Middle TEXT,
-    FirstPhonetic TEXT, MiddlePhonetic TEXT, LastPhonetic TEXT,
-    Organization TEXT, Department TEXT, Note TEXT,
-    Kind INTEGER, Birthday TEXT, JobTitle TEXT, Nickname TEXT,
-    Prefix TEXT, Suffix TEXT, FirstSort TEXT, LastSort TEXT,
-    CreationDate INTEGER, ModificationDate INTEGER,
-    CompositeNameFallback TEXT, ExternalIdentifier TEXT, guid TEXT
-);
-CREATE TABLE ABMultiValue (
-    UID INTEGER PRIMARY KEY,
-    record_id INTEGER,
-    property INTEGER,
-    identifier INTEGER,
-    label INTEGER,
-    value TEXT,
-    guid TEXT
-);
-CREATE TABLE ABMultiValueLabel (value TEXT, UNIQUE (value));
-CREATE INDEX ABMultiValueRecordIDIndex ON ABMultiValue (record_id);
-";
-
 pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
-    conn.execute_batch(SCHEMA)?;
+    crate::reference::create_tables(conn, crate::reference::ADDRESS_BOOK_SCHEMA)?;
     let tx = conn.unchecked_transaction()?;
     for label in ["_$!<Mobile>!$_", "_$!<Home>!$_", "_$!<Work>!$_"] {
         tx.execute("INSERT INTO ABMultiValueLabel (value) VALUES (?1)", [label])?;
@@ -62,5 +39,6 @@ pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
             }
         }
     }
-    tx.commit()
+    tx.commit()?;
+    crate::reference::finish(conn, crate::reference::ADDRESS_BOOK_SCHEMA)
 }

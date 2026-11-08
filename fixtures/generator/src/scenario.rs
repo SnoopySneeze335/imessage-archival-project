@@ -45,6 +45,9 @@ pub struct Message {
     pub rowid: i64,
     pub guid: String,
     pub text: Option<String>,
+    /// Store the text only in `attributedBody`, leaving `message.text` NULL,
+    /// as newer iOS versions often do.
+    pub text_only_in_body: bool,
     pub handle_id: i64,
     pub service: &'static str,
     /// Unix seconds; converted to Apple-epoch nanoseconds on write.
@@ -517,6 +520,7 @@ pub fn build() -> Scenario {
     {
         let m = b.s.messages.iter_mut().find(|m| m.guid == edited).unwrap();
         m.date_edited = m.date + 90;
+        m.text_only_in_body = true;
     }
     let unsent = b.push(Some(1), me, None);
     b.s.messages[unsent].date_retracted = b.s.messages[unsent].date + 30;
@@ -555,7 +559,8 @@ pub fn build() -> Scenario {
         false,
         false,
     ); // no path
-    b.say(1, avery, &long_message());
+    let long = b.push(Some(1), avery, Some(long_message()));
+    b.s.messages[long].text_only_in_body = true;
     b.wait(60 * 24 * 40);
     let deleted = b.push(
         None,
@@ -587,7 +592,8 @@ pub fn build() -> Scenario {
     for i in 0..150usize {
         let from = if (i * 7 + 3) % 5 < 2 { me } else { bram };
         let text = FILLER[(i * 7) % FILLER.len()];
-        b.say(4, from, text);
+        let m = b.push(Some(4), from, Some(text.to_owned()));
+        b.s.messages[m].text_only_in_body = i % 10 == 5;
         // Mixed gaps: seconds-apart runs plus hour and day breaks.
         b.wait(match i % 9 {
             0 => 60 * 26,
