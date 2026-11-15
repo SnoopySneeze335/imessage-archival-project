@@ -60,6 +60,7 @@ cargo run -p imessage-ap -- serve --port 8080 --data ./data --web web/dist
 
 # Import the fixture and print counts
 cargo run -p imessage-ap -- ingest --backup fixtures/out/backup-v1 --data ./data
+cargo run -p imessage-ap -- attachments --backup fixtures/out/backup-v1 --data ./data  # files + thumbnails; resumable
 cargo run -p imessage-ap -- stats --data ./data
 cargo run -p imessage-ap -- migrate --data ./data   # schema upgrade only (ingest also migrates)
 
@@ -70,7 +71,7 @@ cd web && npm ci && npm run typecheck && npm run build   # npm run dev proxies /
 scripts/ci/check-file-size.sh
 scripts/ci/check-pii.sh
 
-# Image
+# Image (PRs from this repo are also pushed as ghcr.io/<owner>/imessage-ap:pr-<N>)
 docker build -t imessage-ap .
 ```
 
@@ -129,6 +130,8 @@ what they cover; to reverse one, add a new record that supersedes it.
   handle and chat counts differ from the crate's, and the Jan 4 leftovers.
 - [0004](docs/decisions/0004-versions-and-multiple-backups.md): message
   versions, newest-backup-wins, and import-order independence.
+- [0005](docs/decisions/0005-blobs-and-derivatives.md): the blob store,
+  resumable crash-safe copies, thumbnails and the derivative queue.
 
 ## Dependencies
 
@@ -137,7 +140,7 @@ what they cover; to reverse one, add a new record that supersedes it.
 - Add crates to the workspace table, not to a member crate directly.
 - Upgrades are deliberate, in their own PR, and run the fixture tests.
 - **Count check:** after any change to the ingester (`ingest.rs`, `backup.rs`,
-  `archive/`) or a crate upgrade, ask the user to re-run the count check on
+  `attachments.rs`, `blobs.rs`, `archive/`) or a crate upgrade, ask the user to re-run the count check on
   the real backup (`ingest` then `stats --json`) and compare it with
   `docs/reference/jan4-baseline.json`. Explain every difference in the PR.
 

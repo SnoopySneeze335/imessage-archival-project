@@ -101,6 +101,9 @@ pub struct Expected {
     pub attachments_missing_file: usize,
     pub attachments_without_path: usize,
     pub attachment_bytes_present: u64,
+    /// Distinct file contents among the present attachments (blobs).
+    pub attachment_files_unique: usize,
+    pub attachment_bytes_unique: u64,
     /// Attachment rows no message refers to (iOS leftovers).
     pub attachments_without_message: usize,
     /// Reactions whose target is not in this backup (iOS leftovers).
@@ -336,6 +339,8 @@ fn expected(s: &Scenario) -> Expected {
         .iter()
         .filter(|a| a.filename.is_some() && a.content.is_some())
         .collect();
+    let unique_files: BTreeSet<&Vec<u8>> =
+        present.iter().filter_map(|a| a.content.as_ref()).collect();
     Expected {
         generator_version: env!("CARGO_PKG_VERSION"),
         messages: s.messages.len(),
@@ -395,6 +400,8 @@ fn expected(s: &Scenario) -> Expected {
             .iter()
             .map(|a| a.content.as_ref().map_or(0, |c| c.len() as u64))
             .sum(),
+        attachment_files_unique: unique_files.len(),
+        attachment_bytes_unique: unique_files.iter().map(|c| c.len() as u64).sum(),
         attachments_without_message: s
             .attachments
             .iter()

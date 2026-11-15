@@ -378,6 +378,8 @@ impl Builder {
 
 /// A tiny invented HEIC image (see fixtures/media/README.md).
 const HEIC_SAMPLE: &[u8] = include_bytes!("../../media/fixture-32x32.heic");
+/// A tiny invented HEVC video (see fixtures/media/README.md).
+const HEVC_VIDEO_SAMPLE: &[u8] = include_bytes!("../../media/fixture-1s-hevc.mov");
 
 const FILLER: &[&str] = &[
     "Did you see the new trail map?",
@@ -753,6 +755,38 @@ pub fn build() -> Scenario {
         "image/heic",
         "public.heic",
         Some(HEIC_SAMPLE.to_vec()),
+        true,
+        false,
+    );
+    // Milestone 3: the same photo sent back (identical bytes, so one blob), a
+    // file whose image data is cut short (its thumbnail fails), and a video.
+    b.attach(
+        11,
+        esme,
+        "IMG_0009.PNG",
+        "image/png",
+        "public.png",
+        Some(crate::media::png(32, [20, 20, 80], [200, 200, 255])),
+        true,
+        false,
+    );
+    b.attach(
+        11,
+        esme,
+        "IMG_0008.JPG",
+        "image/jpeg",
+        "public.jpeg",
+        Some(crate::media::truncated_jpeg()),
+        true,
+        false,
+    );
+    b.attach(
+        11,
+        me,
+        "IMG_0010.MOV",
+        "video/quicktime",
+        "com.apple.quicktime-movie",
+        Some(HEVC_VIDEO_SAMPLE.to_vec()),
         true,
         false,
     );
