@@ -29,8 +29,14 @@ from the device name) or addresses.
 | --- | --- |
 | Source backup | Jan 4, 2026 local backup (`backup_date` 1767575013 = 2026-01-04 17:03 PST) |
 | iOS version | 26.1 |
-| Reader | `imessage-database` 5.0.1, archive schema v1 (Milestone 2a) |
-| Checked | 2026-11-08 |
+| Reader | `imessage-database` 5.0.1, archive schema v2 (Milestone 2b) |
+| Checked | 2026-11-08 (schema v1); 2026-11-15 after migrating to v2 and re-importing |
+
+The v2 check migrated the v1 archive in place and re-imported the backup. The
+re-import added no records and no versions (0 messages changed) and found the
+same 5,381 issues, so every migrated message matched what the v2 ingester
+reads. It added the 3,029 edit-history entries that schema v1 did not parse.
+All other counts are unchanged from v1.
 
 After any change to the ingester, or an upgrade of `imessage-database`, run
 the count check again and compare it with this file (see AGENTS.md). Every
