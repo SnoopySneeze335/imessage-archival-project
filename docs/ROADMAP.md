@@ -57,7 +57,7 @@ Split into two PRs ([decision 0005](decisions/0005-blobs-and-derivatives.md)).
 - [x] Missing-file and no-path tracking; unreadable files reported and retried
 - [x] Stats: unique blobs, bytes, duplicates skipped, thumbnails made, derivatives pending
 - [x] Fixture: a duplicate file, a damaged JPEG and an HEVC video
-- [ ] Check: 25,040 attachment records have files and are copied; 2,654 are flagged missing
+- [x] Check: 25,040 attachment records have files and are copied; 2,654 are flagged missing
 
 **3b: background queue**
 

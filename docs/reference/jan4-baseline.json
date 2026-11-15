@@ -1,8 +1,8 @@
 {
-  "archive_schema_version": 2,
+  "archive_schema_version": 3,
   "archive": {
     "sources": 1,
-    "import_runs_succeeded": 3,
+    "import_runs_succeeded": 1,
     "import_runs_failed": 0,
     "messages": 371159,
     "messages_in_chat": 371126,
@@ -20,12 +20,22 @@
     "attachment_records": 27694,
     "attachments_with_file": 25040,
     "attachment_files_missing": 2652,
-    "attachments_without_path": 2
+    "attachments_without_path": 2,
+    "attachment_files_copied": 25040,
+    "attachment_bytes_copied": 49086254711,
+    "attachment_files_pending_copy": 0,
+    "blobs": 19801,
+    "blob_bytes": 43430863802,
+    "duplicates_skipped": 5239,
+    "thumbnails_made": 16736,
+    "thumbnails_failed": 28,
+    "derivatives_pending": 7047,
+    "derivatives_failed": 28
   },
   "sources": [
     {
       "id": 1,
-      "device_name": "mason’s iphone",
+      "device_name": "<device name>",
       "ios_version": "26.1",
       "backup_date": 1767575013,
       "handle_rows": 1431,

@@ -22,21 +22,38 @@ until its schema check passes again.
 ## Count-check baseline
 
 `jan4-baseline.json` is the `imessage-ap stats --json` output for the real
-Jan 4, 2026 backup. It holds counts only: no message content, names (apart
-from the device name) or addresses.
+Jan 4, 2026 backup. It holds counts only: no message content, names or
+addresses. The device name is replaced with `<device name>`; `stats` prints the
+real one, so leave it out when updating this file.
 
 | | |
 | --- | --- |
 | Source backup | Jan 4, 2026 local backup (`backup_date` 1767575013 = 2026-01-04 17:03 PST) |
 | iOS version | 26.1 |
-| Reader | `imessage-database` 5.0.1, archive schema v2 (Milestone 2b) |
-| Checked | 2026-11-08 (schema v1); 2026-11-15 after migrating to v2 and re-importing |
+| Reader | `imessage-database` 5.0.1, archive schema v3 (Milestone 3a) |
+| Checked | 2026-11-08 (schema v1); 2026-11-15 after migrating to v2 and re-importing; 2026-11-15 fresh v3 import plus attachment files |
 
 The v2 check migrated the v1 archive in place and re-imported the backup. The
 re-import added no records and no versions (0 messages changed) and found the
 same 5,381 issues, so every migrated message matched what the v2 ingester
 reads. It added the 3,029 edit-history entries that schema v1 did not parse.
 All other counts are unchanged from v1.
+
+The v3 check started from an empty data directory: one `ingest`, then
+`attachments` in four runs (`--limit 2000`, a run stopped with `docker stop`,
+a run that resumed and finished, and a final run that read 0 files). Record
+counts are unchanged from v2; `import_runs_succeeded` is 1 because the data
+directory was fresh, and attachment runs are not counted there.
+
+- 25,040 files copied, exactly the 25,040 attachments with a file. The other
+  2,654 are the 2,652 missing files and 2 records with no path.
+- `attachment_bytes_copied` is 49,086,254,711, exactly the crate's
+  `attachment_bytes_on_disk`. `blob_bytes` is lower (43,430,863,802) because
+  5,239 copies were duplicates of 19,801 distinct files.
+- 16,736 thumbnails made and 28 failed. Every image and video blob gets one
+  thumbnail row, and none are left pending. `derivatives_failed` is 28
+  because in schema 3 only thumbnails can fail; the 7,047 pending derivatives
+  (HEIC previews, voice and video conversions) wait for Milestone 3b.
 
 After any change to the ingester, or an upgrade of `imessage-database`, run
 the count check again and compare it with this file (see AGENTS.md). Every
