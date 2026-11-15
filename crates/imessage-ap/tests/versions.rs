@@ -275,6 +275,7 @@ fn reimporting_either_backup_changes_nothing() {
 /// Turns a current archive back into schema 1: one copy per message in
 /// `message_raw`, no versions or edit history.
 fn downgrade_to_v1(db: &Connection) {
+    common::downgrade_to_v2(db);
     db.execute_batch(
         "CREATE TABLE message_raw (
              message_id INTEGER PRIMARY KEY REFERENCES message (id),
@@ -298,7 +299,7 @@ fn schema_1_archive_migrates_without_reimport() {
     let (data, _) = b.import("single", &[&b.v1]);
     let want = canonical_dump(&archive_db(&data));
     downgrade_to_v1(&archive_db(&data));
-    assert_eq!(archive::migrations().len(), 2);
+    assert_eq!(archive::migrations().len(), 3);
 
     // Opening for writing migrates; nothing is lost except the edit history,
     // which the next import of the same backup fills without new versions.

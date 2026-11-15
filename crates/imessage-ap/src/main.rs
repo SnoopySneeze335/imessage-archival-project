@@ -1,4 +1,12 @@
-use std::{net::SocketAddr, path::PathBuf, process::ExitCode};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    process::ExitCode,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -45,6 +53,25 @@ enum Command {
         /// Data directory; archive.db is created here.
         #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
         data: PathBuf,
+    },
+    /// Copy an ingested backup's attachment files into the data directory's
+    /// blob store, once per distinct content, and make their thumbnails.
+    /// Resumable: an interrupted run continues where it stopped, and running
+    /// it again copies nothing. The backup's files are only read.
+    Attachments {
+        /// Backup folder (the one containing Manifest.db), already ingested.
+        #[arg(long)]
+        backup: PathBuf,
+        /// Data directory containing archive.db; files go to blobs/ and derived/.
+        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
+        data: PathBuf,
+        /// Thumbnails made at once. Defaults to the CPUs available, which
+        /// follows a container's --cpus limit.
+        #[arg(long)]
+        jobs: Option<usize>,
+        /// Stop after reading this many files (to try a run, or test resuming).
+        #[arg(long)]
+        limit: Option<usize>,
     },
     /// Upgrade archive.db to this build's schema, then exit. Ingest does the
     /// same on its own; this only migrates, so stats can be checked first.
@@ -139,6 +166,25 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Attachments {
+            backup,
+            data,
+            jobs,
+            limit,
+        } => {
+            let opts = imessage_ap::attachments::Options {
+                jobs: jobs.unwrap_or_else(imessage_ap::attachments::default_jobs),
+                limit,
+                stop: Arc::new(AtomicBool::new(false)),
+            };
+            tokio::spawn(stop_on_signal(opts.stop.clone()));
+            let summary = tokio::task::spawn_blocking(move || {
+                imessage_ap::attachments::run(&backup, &data, &opts)
+            })
+            .await??;
+            print_attachments(&summary);
+            Ok(())
+        }
         Command::Migrate { data } => {
             anyhow::ensure!(
                 imessage_ap::archive::path(&data).is_file(),
@@ -161,6 +207,59 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+fn print_attachments(summary: &imessage_ap::attachments::Summary) {
+    let c = &summary.counts;
+    let gb = |b: u64| format!("{:.2} GB", b as f64 / 1e9);
+    let state = if summary.interrupted {
+        "was interrupted; run the same command again to resume"
+    } else {
+        "succeeded"
+    };
+    println!(
+        "Attachment run {} (backup {}) {state}",
+        summary.run_id, summary.source_id
+    );
+    println!(
+        "  files to copy at start    {:>9}",
+        c.files_pending_at_start
+    );
+    println!(
+        "  files read                {:>9}  {}",
+        c.files_read,
+        gb(c.bytes_read)
+    );
+    println!(
+        "  new blobs                 {:>9}  {}",
+        c.blobs_added,
+        gb(c.bytes_stored)
+    );
+    println!("  duplicates skipped        {:>9}", c.duplicates_skipped);
+    println!("  read failures             {:>9}", c.read_failures);
+    println!("  thumbnails made           {:>9}", c.thumbnails_made);
+    println!("  thumbnails failed         {:>9}", c.thumbnails_failed);
+    println!("  conversions queued        {:>9}", c.derivatives_queued);
+    println!("  files still to copy       {:>9}", c.files_pending_at_end);
+    println!(
+        "  thumbnails still to make  {:>9}",
+        c.thumbnails_pending_at_end
+    );
+    if let Some(why) = &summary.thumbnails_skipped {
+        println!("  thumbnails skipped: {why}");
+    }
+}
+
+/// First Ctrl-C or SIGTERM: finish the current file and stop cleanly.
+/// Second: exit at once (the next run still resumes safely).
+async fn stop_on_signal(stop: Arc<AtomicBool>) {
+    for _ in 0..2 {
+        shutdown_signal().await;
+        if stop.swap(true, Ordering::SeqCst) {
+            std::process::exit(130);
+        }
+        tracing::warn!("stopping after the current file; press Ctrl-C again to quit now");
     }
 }
 

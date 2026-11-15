@@ -4,8 +4,11 @@
 
 pub mod address;
 pub mod archive;
+pub mod attachments;
 pub mod backup;
+pub mod blobs;
 pub mod ingest;
+pub mod media;
 pub mod server;
 pub mod stats;
 

@@ -39,6 +39,22 @@ pub struct ArchiveStats {
     pub attachments_with_file: u64,
     pub attachment_files_missing: u64,
     pub attachments_without_path: u64,
+    /// Attachment files copied into /data/blobs (one per backup holding the
+    /// file), and their size, duplicates included.
+    pub attachment_files_copied: u64,
+    pub attachment_bytes_copied: u64,
+    /// Files a backup holds that are not copied yet.
+    pub attachment_files_pending_copy: u64,
+    /// Distinct files in /data/blobs and their total size.
+    pub blobs: u64,
+    pub blob_bytes: u64,
+    /// Copied files whose content was already stored (copied minus blobs).
+    pub duplicates_skipped: u64,
+    pub thumbnails_made: u64,
+    pub thumbnails_failed: u64,
+    /// Thumbnails, previews and conversions waiting to be made.
+    pub derivatives_pending: u64,
+    pub derivatives_failed: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,15 +86,20 @@ fn n(conn: &Connection, sql: &str) -> Result<u64> {
 /// Reads counts from the archive in `data_dir`.
 pub fn collect(data_dir: &Path) -> Result<Stats> {
     let conn = archive::open_read_only(data_dir)?;
+    let copied = n(
+        &conn,
+        "SELECT COUNT(*) FROM attachment_source WHERE sha256 IS NOT NULL",
+    )?;
+    let blobs = n(&conn, "SELECT COUNT(*) FROM blob")?;
     let archive = ArchiveStats {
         sources: n(&conn, "SELECT COUNT(*) FROM source")?,
         import_runs_succeeded: n(
             &conn,
-            "SELECT COUNT(*) FROM import_run WHERE status = 'succeeded'",
+            "SELECT COUNT(*) FROM import_run WHERE kind = 'records' AND status = 'succeeded'",
         )?,
         import_runs_failed: n(
             &conn,
-            "SELECT COUNT(*) FROM import_run WHERE status = 'failed'",
+            "SELECT COUNT(*) FROM import_run WHERE kind = 'records' AND status = 'failed'",
         )?,
         messages: n(&conn, "SELECT COUNT(*) FROM message")?,
         messages_in_chat: n(
@@ -121,6 +142,34 @@ pub fn collect(data_dir: &Path) -> Result<Stats> {
             &conn,
             "SELECT COUNT(*) FROM attachment WHERE missing = 'no_path'",
         )?,
+        attachment_files_copied: copied,
+        attachment_bytes_copied: n(
+            &conn,
+            "SELECT COALESCE(SUM(b.size), 0) FROM attachment_source s JOIN blob b ON b.sha256 = s.sha256",
+        )?,
+        attachment_files_pending_copy: n(
+            &conn,
+            "SELECT COUNT(*) FROM attachment_source WHERE present = 1 AND sha256 IS NULL",
+        )?,
+        blobs,
+        blob_bytes: n(&conn, "SELECT COALESCE(SUM(size), 0) FROM blob")?,
+        duplicates_skipped: copied.saturating_sub(blobs),
+        thumbnails_made: n(
+            &conn,
+            "SELECT COUNT(*) FROM derivative WHERE kind = 'thumb' AND status = 'done'",
+        )?,
+        thumbnails_failed: n(
+            &conn,
+            "SELECT COUNT(*) FROM derivative WHERE kind = 'thumb' AND status = 'failed'",
+        )?,
+        derivatives_pending: n(
+            &conn,
+            "SELECT COUNT(*) FROM derivative WHERE status = 'pending'",
+        )?,
+        derivatives_failed: n(
+            &conn,
+            "SELECT COUNT(*) FROM derivative WHERE status = 'failed'",
+        )?,
     };
 
     let mut stmt = conn.prepare(
@@ -128,7 +177,7 @@ pub fn collect(data_dir: &Path) -> Result<Stats> {
                 (SELECT COUNT(*) FROM source_handle WHERE source_id = s.id),
                 (SELECT COUNT(*) FROM source_chat WHERE source_id = s.id),
                 (SELECT COUNT(*) FROM message_source WHERE source_id = s.id),
-                (SELECT diagnostics FROM import_run WHERE source_id = s.id AND status = 'succeeded' ORDER BY id DESC LIMIT 1)
+                (SELECT diagnostics FROM import_run WHERE source_id = s.id AND kind = 'records' AND status = 'succeeded' ORDER BY id DESC LIMIT 1)
          FROM source s ORDER BY s.backup_date, s.id",
     )?;
     let sources = stmt
@@ -205,6 +254,31 @@ pub fn render(s: &Stats) -> String {
     ];
     for (label, v) in rows {
         let _ = writeln!(out, "  {label:<42}{:>12}", thousands(v));
+    }
+    let _ = writeln!(out, "\nFiles (/data/blobs, /data/derived)");
+    let files: Vec<(&str, String)> = vec![
+        (
+            "Attachment files copied",
+            thousands(a.attachment_files_copied),
+        ),
+        ("  size, duplicates included", gb(a.attachment_bytes_copied)),
+        (
+            "  not copied yet",
+            thousands(a.attachment_files_pending_copy),
+        ),
+        ("Unique blobs", thousands(a.blobs)),
+        ("  total size", gb(a.blob_bytes)),
+        ("  duplicates skipped", thousands(a.duplicates_skipped)),
+        ("Thumbnails made", thousands(a.thumbnails_made)),
+        ("  failed", thousands(a.thumbnails_failed)),
+        (
+            "Derivatives pending (all kinds)",
+            thousands(a.derivatives_pending),
+        ),
+        ("  failed (all kinds)", thousands(a.derivatives_failed)),
+    ];
+    for (label, v) in files {
+        let _ = writeln!(out, "  {label:<42}{v:>12}");
     }
     for src in &s.sources {
         let _ = writeln!(

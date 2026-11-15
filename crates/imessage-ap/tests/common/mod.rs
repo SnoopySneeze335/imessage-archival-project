@@ -224,10 +224,20 @@ pub fn canonical_dump(conn: &Connection) -> String {
         (
             "attachment_source",
             format!(
-                "SELECT {}, {}, source_rowid, backup_file_id, present FROM attachment_source",
+                "SELECT {}, {}, source_rowid, backup_file_id, present, sha256 FROM attachment_source",
                 attachment("attachment_id"),
                 src("source_id")
             ),
+        ),
+        (
+            "blob",
+            "SELECT sha256, size, media_kind FROM blob".into(),
+        ),
+        (
+            // Error text names the temporary data directory, so only its
+            // presence is compared.
+            "derivative",
+            "SELECT sha256, kind, status, recipe, path, bytes, error IS NOT NULL FROM derivative".into(),
         ),
     ];
     let mut covered: Vec<String> = queries.iter().map(|(t, _)| (*t).to_owned()).collect();
@@ -242,4 +252,21 @@ pub fn canonical_dump(conn: &Connection) -> String {
         out.push_str(&format!("## {t}\n{}\n", rows(conn, &sql).join("\n")));
     }
     out
+}
+
+/// Turns a current archive back into schema 2 (Milestone 2b): no blobs,
+/// derivatives or file hashes, and no run kinds.
+pub fn downgrade_to_v2(db: &Connection) {
+    db.execute_batch(
+        "DELETE FROM import_issue WHERE run_id IN (SELECT id FROM import_run WHERE kind != 'records');
+         DELETE FROM import_run WHERE kind != 'records';
+         UPDATE attachment SET sha256 = NULL;
+         DROP INDEX attachment_source_sha256;
+         ALTER TABLE attachment_source DROP COLUMN sha256;
+         ALTER TABLE import_run DROP COLUMN kind;
+         DROP TABLE derivative;
+         DROP TABLE blob;
+         PRAGMA user_version = 2;",
+    )
+    .unwrap();
 }

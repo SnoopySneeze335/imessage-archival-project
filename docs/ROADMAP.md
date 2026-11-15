@@ -48,11 +48,21 @@ Split into two PRs.
 
 ## 3. Attachments
 
-- [ ] Content-addressed copy into `/data/blobs/ab/cd/<sha256>`
-- [ ] Thumbnails at import; previews and conversions in a background queue
+Split into two PRs ([decision 0005](decisions/0005-blobs-and-derivatives.md)).
+
+**3a: blobs and thumbnails**
+
+- [x] Content-addressed copy into `/data/blobs/ab/cd/<sha256>`: `imessage-ap attachments`, read-only, resumable, crash-safe
+- [x] Thumbnails at import; previews and conversions queued for the background queue
+- [x] Missing-file and no-path tracking; unreadable files reported and retried
+- [x] Stats: unique blobs, bytes, duplicates skipped, thumbnails made, derivatives pending
+- [x] Fixture: a duplicate file, a damaged JPEG and an HEVC video
+- [ ] Check: 25,040 attachment records have files and are copied; 2,654 are flagged missing
+
+**3b: background queue**
+
+- [ ] `imessage-ap derive`: the queue, resumable, CPU-limited
 - [ ] HEIC to web formats; voice messages (CAF) and video conversion
-- [ ] Missing-file and no-path tracking
-- [ ] Check: 25,040 attachment records have files; 2,654 are flagged missing
 
 ## 4. Viewer
 

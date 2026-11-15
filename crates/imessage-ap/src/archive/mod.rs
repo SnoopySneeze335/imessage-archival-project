@@ -13,6 +13,7 @@ pub const ARCHIVE_DB: &str = "archive.db";
 const MIGRATIONS: &[&str] = &[
     include_str!("0001_initial.sql"),
     include_str!("0002_versions.sql"),
+    include_str!("0003_blobs.sql"),
 ];
 
 /// Path of archive.db inside `data_dir`.
@@ -28,7 +29,8 @@ pub fn open(data_dir: &Path) -> Result<Connection> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
-         PRAGMA foreign_keys = ON;",
+         PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 5000;",
     )?;
     migrate(&mut conn)?;
     Ok(conn)

@@ -56,6 +56,17 @@ pub fn caf_voice(sample_rate: u32, samples: u32) -> Vec<u8> {
     out
 }
 
+/// The first bytes of a JPEG (start of image and a JFIF header) with the
+/// image data cut off, as a damaged or partly copied file looks.
+pub fn truncated_jpeg() -> Vec<u8> {
+    let mut out = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+    out.extend_from_slice(b"JFIF\0");
+    out.extend_from_slice(&[1, 1, 0, 0, 1, 0, 1, 0, 0]);
+    out.extend_from_slice(&[0xFF, 0xDB, 0x00, 0x43, 0x00]);
+    out.extend(std::iter::repeat_n(0x10, 24));
+    out
+}
+
 fn caf_chunk(out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
     out.extend_from_slice(kind);
     out.extend_from_slice(&(body.len() as i64).to_be_bytes());

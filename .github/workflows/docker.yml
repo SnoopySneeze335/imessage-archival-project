@@ -1,7 +1,9 @@
 name: Docker image
 
-# Pull requests: build the image and smoke-test it; nothing is pushed.
-# main and v* tags: also push to ghcr.io/<owner>/imessage-ap.
+# Pull requests: build the image and smoke-test it. Pull requests from this
+# repository (never from forks) also push it as ghcr.io/<owner>/imessage-ap:pr-<N>,
+# so real-data checks can `docker pull` exactly what the PR builds.
+# main and v* tags: push to ghcr.io/<owner>/imessage-ap.
 on:
   pull_request:
   push:
@@ -71,12 +73,37 @@ jobs:
           echo "health: $status"
           test "$status" = healthy
 
+      - name: Generate the fixture backup
+        run: cargo run --locked -p fixture-gen -- --out "$RUNNER_TEMP/backups/fixture"
+
+      - name: Import the fixture and copy its attachments inside the image
+        run: |
+          mkdir -p "$RUNNER_TEMP/fixture-data"
+          app() {
+            docker run --rm --cpus=2 \
+              -v "$RUNNER_TEMP/backups:/backups:ro" -v "$RUNNER_TEMP/fixture-data:/data" \
+              imessage-ap:smoke "$@"
+          }
+          app ingest --backup /backups/fixture --data /data
+          app attachments --backup /backups/fixture --data /data --limit 3
+          app attachments --backup /backups/fixture --data /data
+          app attachments --backup /backups/fixture --data /data | tee again.txt
+          grep -Eq '^  files read +0 ' again.txt
+          app stats --json --data /data | tee stats.json
+          # Thumbnails (HEIC and HEVC video included) need the image's own tools.
+          jq -e '.archive
+            | .attachment_files_pending_copy == 0
+              and .attachment_files_copied == .attachments_with_file
+              and .duplicates_skipped == 1
+              and .thumbnails_made == 6 and .thumbnails_failed == 1
+              and .derivatives_pending == 3' stats.json
+
       - name: Smoke test logs
         if: failure()
         run: docker logs smoke || true
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -84,7 +111,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/build-push-action@v6
         with:
           context: .
