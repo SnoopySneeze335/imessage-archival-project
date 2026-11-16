@@ -141,11 +141,11 @@ jobs:
 
       - name: Render check on the fixture, with the databases and derived files moved
         run: |
-          mkdir -p "$RUNNER_TEMP/moved/db" "$RUNNER_TEMP/moved/derived"
+          mkdir -p "$RUNNER_TEMP/moved/db"
           sudo mv "$RUNNER_TEMP/fixture-data/archive.db" "$RUNNER_TEMP/moved/db/"
           sudo rm -f "$RUNNER_TEMP/fixture-data/archive.db-wal" "$RUNNER_TEMP/fixture-data/archive.db-shm"
-          sudo mv "$RUNNER_TEMP/fixture-data/derived/"* "$RUNNER_TEMP/moved/derived/"
-          sudo rmdir "$RUNNER_TEMP/fixture-data/derived"
+          # The whole folder, hidden .tmp included.
+          sudo mv "$RUNNER_TEMP/fixture-data/derived" "$RUNNER_TEMP/moved/derived"
           app() {
             docker run --rm -v "$RUNNER_TEMP/fixture-data:/data" \
               -v "$RUNNER_TEMP/moved/db:/db" -v "$RUNNER_TEMP/moved/derived:/derived" \
