@@ -61,7 +61,7 @@ fn rows(conn: &Connection, sql: &str) -> Vec<String> {
 fn data_tables(conn: &Connection) -> Vec<String> {
     conn.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-         AND name NOT IN ('import_run', 'import_issue') ORDER BY name",
+         AND name NOT IN ('import_run', 'import_issue', 'derive_run') ORDER BY name",
     )
     .unwrap()
     .query_map([], |r| r.get(0))
@@ -237,7 +237,7 @@ pub fn canonical_dump(conn: &Connection) -> String {
             // Error text names the temporary data directory, so only its
             // presence is compared.
             "derivative",
-            "SELECT sha256, kind, status, recipe, path, bytes, error IS NOT NULL FROM derivative".into(),
+            "SELECT sha256, kind, status, recipe, action, path, bytes, error IS NOT NULL FROM derivative".into(),
         ),
     ];
     let mut covered: Vec<String> = queries.iter().map(|(t, _)| (*t).to_owned()).collect();
@@ -259,7 +259,19 @@ pub fn canonical_dump(conn: &Connection) -> String {
 /// Turns a current archive into what schema 3 (Milestone 3a) left: no record
 /// of which decoder tried each derivative.
 #[allow(dead_code)]
+/// Turns a current archive back into schema 4 (Milestone 3a follow-up): no
+/// derive runs and no derivative actions.
+pub fn downgrade_to_v4(db: &Connection) {
+    db.execute_batch(
+        "DROP TABLE derive_run;
+         ALTER TABLE derivative DROP COLUMN action;
+         PRAGMA user_version = 4;",
+    )
+    .unwrap();
+}
+
 pub fn downgrade_to_v3(db: &Connection) {
+    downgrade_to_v4(db);
     db.execute_batch(
         "ALTER TABLE derivative DROP COLUMN decoder;
          PRAGMA user_version = 3;",
@@ -268,6 +280,7 @@ pub fn downgrade_to_v3(db: &Connection) {
 }
 
 pub fn downgrade_to_v2(db: &Connection) {
+    downgrade_to_v3(db);
     db.execute_batch(
         "DELETE FROM import_issue WHERE run_id IN (SELECT id FROM import_run WHERE kind != 'records');
          DELETE FROM import_run WHERE kind != 'records';

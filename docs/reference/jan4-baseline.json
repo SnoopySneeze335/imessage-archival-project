@@ -1,5 +1,5 @@
 {
-  "archive_schema_version": 4,
+  "archive_schema_version": 5,
   "archive": {
     "sources": 1,
     "import_runs_succeeded": 1,
@@ -29,8 +29,43 @@
     "duplicates_skipped": 5239,
     "thumbnails_made": 16764,
     "thumbnails_failed": 0,
-    "derivatives_pending": 7047,
-    "derivatives_failed": 0
+    "derivatives_pending": 0,
+    "derivatives_failed": 0,
+    "derivative_bytes": 6295910761,
+    "derivatives": {
+      "audio": {
+        "done": 110,
+        "made": 110,
+        "original": 0,
+        "failed": 0,
+        "pending": 0,
+        "bytes": 24264069
+      },
+      "preview": {
+        "done": 5671,
+        "made": 5665,
+        "original": 6,
+        "failed": 0,
+        "pending": 0,
+        "bytes": 1156388928
+      },
+      "thumb": {
+        "done": 16764,
+        "made": 16764,
+        "original": 0,
+        "failed": 0,
+        "pending": 0,
+        "bytes": 204148444
+      },
+      "video": {
+        "done": 1266,
+        "made": 581,
+        "original": 685,
+        "failed": 0,
+        "pending": 0,
+        "bytes": 4911109320
+      }
+    }
   },
   "sources": [
     {

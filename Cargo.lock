@@ -585,6 +585,7 @@ dependencies = [
  "fixture-gen",
  "http-body-util",
  "imessage-database",
+ "libc",
  "plist",
  "rusqlite",
  "serde",

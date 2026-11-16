@@ -382,6 +382,10 @@ const HEIC_SAMPLE: &[u8] = include_bytes!("../../media/fixture-32x32.heic");
 const HEVC_VIDEO_SAMPLE: &[u8] = include_bytes!("../../media/fixture-1s-hevc.mov");
 /// A tiny invented H.264 + AAC video (see fixtures/media/README.md).
 const AAC_VIDEO_SAMPLE: &[u8] = include_bytes!("../../media/fixture-1s-aac.mp4");
+/// A tiny invented HDR (HLG, 10-bit) HEVC video (see fixtures/media/README.md).
+const HLG_VIDEO_SAMPLE: &[u8] = include_bytes!("../../media/fixture-1s-hlg.mov");
+/// A tiny invented AAC tone as an ADTS stream (see fixtures/media/README.md).
+const AAC_AUDIO_SAMPLE: &[u8] = include_bytes!("../../media/fixture-1s-aac.adts");
 
 const FILLER: &[&str] = &[
     "Did you see the new trail map?",
@@ -815,6 +819,83 @@ pub fn build() -> Scenario {
         true,
         false,
     );
+    // Milestone 3b: one file per conversion the background queue makes or
+    // skips (decision 0007), and a damaged file of each kind it converts.
+    b.attach(
+        11,
+        esme,
+        "IMG_0013.MP4",
+        "video/mp4",
+        "public.mpeg-4",
+        Some(AAC_VIDEO_SAMPLE.to_vec()),
+        true,
+        false,
+    );
+    b.attach(
+        11,
+        me,
+        "IMG_0014.MOV",
+        "video/quicktime",
+        "com.apple.quicktime-movie",
+        Some(HLG_VIDEO_SAMPLE.to_vec()),
+        true,
+        false,
+    );
+    b.attach(
+        11,
+        esme,
+        "IMG_0016.HEIC",
+        "image/heic",
+        "public.heic",
+        Some(crate::media::png(16, [90, 30, 160], [250, 250, 250])),
+        true,
+        false,
+    );
+    let v = b.attach(
+        11,
+        me,
+        "Audio Message 2.caf",
+        "audio/x-caf",
+        "com.apple.coreaudio-format",
+        Some(crate::media::caf_aac(AAC_AUDIO_SAMPLE)),
+        true,
+        false,
+    );
+    b.s.messages[v].is_audio_message = true;
+    b.attach(
+        11,
+        esme,
+        "IMG_0012.HEIC",
+        "image/heic",
+        "public.heic",
+        Some(crate::media::truncated(HEIC_SAMPLE, 200)),
+        true,
+        false,
+    );
+    b.attach(
+        11,
+        esme,
+        "IMG_0015.MOV",
+        "video/quicktime",
+        "com.apple.quicktime-movie",
+        Some(crate::media::truncated(HEVC_VIDEO_SAMPLE, 600)),
+        true,
+        false,
+    );
+    let v = b.attach(
+        11,
+        esme,
+        "Audio Message 3.caf",
+        "audio/x-caf",
+        "com.apple.coreaudio-format",
+        Some(crate::media::truncated(
+            &crate::media::caf_voice(8_000, 4_000),
+            40,
+        )),
+        true,
+        false,
+    );
+    b.s.messages[v].is_audio_message = true;
     b.say(11, me, "Résumé attached earlier, let me know!");
     // Sent minutes before backup 1 (09:30); v2 edits one and unsends the other.
     b.at(2025, 5, 1, 9, 25);

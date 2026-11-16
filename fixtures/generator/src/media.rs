@@ -56,6 +56,96 @@ pub fn caf_voice(sample_rate: u32, samples: u32) -> Vec<u8> {
     out
 }
 
+/// AAC-LC audio rewrapped from an ADTS stream into a Core Audio File, as
+/// iOS stores some voice messages: a `desc` chunk, the codec configuration
+/// as a `kuki` (magic cookie) ES descriptor, a `pakt` packet table, and the
+/// raw packets. Browsers cannot read CAF, but the AAC inside plays as is.
+pub fn caf_aac(adts: &[u8]) -> Vec<u8> {
+    let mut packets: Vec<&[u8]> = Vec::new();
+    let (mut at, mut config) = (0, None);
+    while at + 7 <= adts.len() {
+        let h = &adts[at..at + 7];
+        assert!(h[0] == 0xFF && h[1] & 0xF0 == 0xF0, "not an ADTS frame");
+        let header = if h[1] & 1 == 1 { 7 } else { 9 };
+        let len = (usize::from(h[3] & 3) << 11) | (usize::from(h[4]) << 3) | usize::from(h[5] >> 5);
+        let profile = (h[2] >> 6) + 1; // audio object type
+        let rate_index = (h[2] >> 2) & 0xF;
+        let channels = ((h[2] & 1) << 2) | (h[3] >> 6);
+        config.get_or_insert((profile, rate_index, channels));
+        packets.push(&adts[at + header..at + len]);
+        at += len;
+    }
+    let (profile, rate_index, channels) = config.expect("no ADTS frames");
+    const RATES: [u32; 13] = [
+        96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
+        8_000, 7_350,
+    ];
+    let rate = RATES[usize::from(rate_index)];
+
+    let mut out = Vec::new();
+    out.extend_from_slice(b"caff");
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+
+    let mut desc = Vec::new();
+    desc.extend_from_slice(&f64::from(rate).to_bits().to_be_bytes());
+    desc.extend_from_slice(b"aac ");
+    desc.extend_from_slice(&u32::from(profile).to_be_bytes()); // MPEG-4 object type
+    desc.extend_from_slice(&0u32.to_be_bytes()); // bytes per packet: variable
+    desc.extend_from_slice(&1024u32.to_be_bytes()); // frames per packet
+    desc.extend_from_slice(&u32::from(channels).to_be_bytes());
+    desc.extend_from_slice(&0u32.to_be_bytes()); // bits per channel
+    caf_chunk(&mut out, b"desc", &desc);
+
+    // ES_Descriptor > DecoderConfigDescriptor > DecoderSpecificInfo, the
+    // AudioSpecificConfig being 5 bits object type, 4 rate index, 4 channels.
+    let asc =
+        (u16::from(profile) << 11) | (u16::from(rate_index) << 7) | (u16::from(channels) << 3);
+    let dsi = [&[0x05, 2][..], &asc.to_be_bytes()].concat();
+    let dcd = [
+        &[0x04, 13 + dsi.len() as u8, 0x40, 0x15, 0, 0, 0][..],
+        &[0, 0, 0, 0, 0, 0, 0, 0],
+        &dsi,
+    ]
+    .concat();
+    let es = [&[0x03, 3 + dcd.len() as u8, 0, 1, 0][..], &dcd].concat();
+    // The cookie is the body of an `esds` box: version and flags, then the
+    // descriptor.
+    caf_chunk(&mut out, b"kuki", &[&[0, 0, 0, 0][..], &es].concat());
+
+    let mut pakt = Vec::new();
+    pakt.extend_from_slice(&(packets.len() as i64).to_be_bytes());
+    pakt.extend_from_slice(&(packets.len() as i64 * 1024).to_be_bytes()); // valid frames
+    pakt.extend_from_slice(&0i32.to_be_bytes()); // priming frames
+    pakt.extend_from_slice(&0i32.to_be_bytes()); // remainder frames
+    for p in &packets {
+        // Packet sizes as big-endian base-128 varints.
+        let mut n = p.len();
+        let mut bytes = vec![(n & 0x7F) as u8];
+        n >>= 7;
+        while n > 0 {
+            bytes.push(0x80 | (n & 0x7F) as u8);
+            n >>= 7;
+        }
+        bytes.reverse();
+        pakt.extend_from_slice(&bytes);
+    }
+    caf_chunk(&mut out, b"pakt", &pakt);
+
+    let mut data = 0u32.to_be_bytes().to_vec(); // edit count
+    for p in &packets {
+        data.extend_from_slice(p);
+    }
+    caf_chunk(&mut out, b"data", &data);
+    out
+}
+
+/// The first `keep` bytes of `file`, as a damaged or partly copied file
+/// looks: the header is intact but the media data is cut off.
+pub fn truncated(file: &[u8], keep: usize) -> Vec<u8> {
+    file[..keep.min(file.len())].to_vec()
+}
+
 /// The first bytes of a JPEG (start of image and a JFIF header) with the
 /// image data cut off, as a damaged or partly copied file looks.
 pub fn truncated_jpeg() -> Vec<u8> {

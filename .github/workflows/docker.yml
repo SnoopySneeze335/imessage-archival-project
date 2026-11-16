@@ -96,8 +96,30 @@ jobs:
             | .attachment_files_pending_copy == 0
               and .attachment_files_copied == .attachments_with_file
               and .duplicates_skipped == 1
-              and .thumbnails_made == 8 and .thumbnails_failed == 1
-              and .derivatives_pending == 5' stats.json
+              and .thumbnails_made == 11 and .thumbnails_failed == 3
+              and .derivatives_pending == 12' stats.json
+
+      - name: Make previews and conversions inside the image, without the backup
+        run: |
+          app() {
+            docker run --rm --cpus=2 -v "$RUNNER_TEMP/fixture-data:/data" imessage-ap:smoke "$@"
+          }
+          app migrate --data /data
+          app derive --data /data --plan
+          app derive --data /data --kind voice --min-free 1G
+          app derive --data /data --kind image --limit 2
+          app derive --data /data
+          app derive --data /data | tee again.txt
+          grep -Eq '^  files started +0$' again.txt
+          app stats --json --data /data | tee stats.json
+          # Every derived file is owned by PUID:PGID (99:100).
+          test -z "$(find "$RUNNER_TEMP/fixture-data/derived" \( ! -uid 99 -o ! -gid 100 \) -print)"
+          jq -e '.archive
+            | .derivatives_pending == 0
+              and .derivatives.preview == {"done":3,"made":2,"original":1,"failed":1,"pending":0,"bytes":.derivatives.preview.bytes}
+              and .derivatives.video.made == 3 and .derivatives.video.original == 1 and .derivatives.video.failed == 1
+              and .derivatives.audio.made == 2 and .derivatives.audio.failed == 1
+              and .derivative_bytes > 0' stats.json
 
       - name: Smoke test logs
         if: failure()

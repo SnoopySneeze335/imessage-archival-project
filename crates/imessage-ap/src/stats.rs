@@ -5,7 +5,7 @@
 //! each imported backup, imessage-database's own diagnostics of that backup,
 //! which use the same definitions as the counts in docs/SPEC.md.
 
-use std::{fmt::Write as _, path::Path};
+use std::{collections::BTreeMap, fmt::Write as _, path::Path};
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -55,6 +55,25 @@ pub struct ArchiveStats {
     /// Thumbnails, previews and conversions waiting to be made.
     pub derivatives_pending: u64,
     pub derivatives_failed: u64,
+    /// Size of every file in /data/derived (thumbnails, previews, conversions).
+    pub derivative_bytes: u64,
+    /// By derivative kind: thumb, preview (images), video and audio (voice).
+    pub derivatives: BTreeMap<String, DerivativeStats>,
+}
+
+/// Counts for one kind of derivative.
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct DerivativeStats {
+    /// Finished: `made` plus `original`.
+    pub done: u64,
+    /// A file was written to /data/derived.
+    pub made: u64,
+    /// Browsers use the blob as it is, so no file was needed.
+    pub original: u64,
+    pub failed: u64,
+    pub pending: u64,
+    /// Size of the files made.
+    pub bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +110,41 @@ pub fn collect(data_dir: &Path) -> Result<Stats> {
         "SELECT COUNT(*) FROM attachment_source WHERE sha256 IS NOT NULL",
     )?;
     let blobs = n(&conn, "SELECT COUNT(*) FROM blob")?;
+    let mut derivatives: BTreeMap<String, DerivativeStats> = ["thumb", "preview", "video", "audio"]
+        .into_iter()
+        .map(|k| (k.to_owned(), DerivativeStats::default()))
+        .collect();
+    let mut stmt = conn.prepare(
+        "SELECT kind, status, path IS NOT NULL, COUNT(*), COALESCE(SUM(bytes), 0)
+         FROM derivative GROUP BY 1, 2, 3",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, bool>(2)?,
+            r.get::<_, i64>(3)? as u64,
+            r.get::<_, i64>(4)? as u64,
+        ))
+    })?;
+    for row in rows {
+        let (kind, status, has_file, count, bytes) = row?;
+        let d = derivatives.entry(kind).or_default();
+        match status.as_str() {
+            "done" => {
+                d.done += count;
+                if has_file {
+                    d.made += count;
+                    d.bytes += bytes;
+                } else {
+                    d.original += count;
+                }
+            }
+            "failed" => d.failed += count,
+            _ => d.pending += count,
+        }
+    }
+    drop(stmt);
     let archive = ArchiveStats {
         sources: n(&conn, "SELECT COUNT(*) FROM source")?,
         import_runs_succeeded: n(
@@ -170,6 +224,8 @@ pub fn collect(data_dir: &Path) -> Result<Stats> {
             &conn,
             "SELECT COUNT(*) FROM derivative WHERE status = 'failed'",
         )?,
+        derivative_bytes: derivatives.values().map(|d| d.bytes).sum(),
+        derivatives,
     };
 
     let mut stmt = conn.prepare(
@@ -276,9 +332,26 @@ pub fn render(s: &Stats) -> String {
             thousands(a.derivatives_pending),
         ),
         ("  failed (all kinds)", thousands(a.derivatives_failed)),
+        ("Derived files, total size", gb(a.derivative_bytes)),
     ];
     for (label, v) in files {
         let _ = writeln!(out, "  {label:<42}{v:>12}");
+    }
+    let _ = writeln!(
+        out,
+        "  {:<10}{:>10}{:>10}{:>10}{:>10}{:>14}",
+        "Derivative", "made", "original", "failed", "pending", "size"
+    );
+    for (kind, d) in &a.derivatives {
+        let _ = writeln!(
+            out,
+            "  {kind:<10}{:>10}{:>10}{:>10}{:>10}{:>14}",
+            thousands(d.made),
+            thousands(d.original),
+            thousands(d.failed),
+            thousands(d.pending),
+            gb(d.bytes)
+        );
     }
     for src in &s.sources {
         let _ = writeln!(

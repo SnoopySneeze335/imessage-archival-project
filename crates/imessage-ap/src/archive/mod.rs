@@ -15,6 +15,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("0002_versions.sql"),
     include_str!("0003_blobs.sql"),
     include_str!("0004_decoder.sql"),
+    include_str!("0005_derive.sql"),
 ];
 
 /// Path of archive.db inside `data_dir`.
