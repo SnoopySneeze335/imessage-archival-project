@@ -13,7 +13,7 @@ and shows them in a fast, iMessage-like web app. It runs as one Docker
 container, for one user, on a home server reachable over Tailscale. No data
 ever leaves that server.
 
-**Milestone in progress: 3, Attachments.** Work only on it unless told otherwise.
+**Milestone in progress: 4, Viewer.** Work only on it unless told otherwise.
 
 ## Stack
 

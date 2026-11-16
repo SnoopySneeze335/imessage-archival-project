@@ -6,8 +6,8 @@ completes them.
 
 ## Next up
 
-1. **Milestone 3: Attachments**: copy files into `/data/blobs`, thumbnails, HEIC and voice-message conversion.
-2. **Milestone 4: Viewer**.
+1. **Milestone 4: Viewer**.
+2. **Milestone 5: Search**.
 
 ## 1. Foundation
 
@@ -66,7 +66,7 @@ Split into two PRs ([decision 0005](decisions/0005-blobs-and-derivatives.md)).
 - [x] HEIC to web formats; voice messages (CAF) and video conversion: only what browsers cannot use, remuxed when only the container is wrong
 - [x] `--kind`, `--limit`, `--min-free` and `--plan`; stats per derivative kind and total derivative bytes
 - [x] Fixture: an AAC voice message in CAF, an HDR (HLG) HEVC video, a browser-ready MP4, a PNG labelled HEIC, and a damaged file of each converted kind
-- [ ] Check: the 7,047 pending derivatives (5,671 image, 1,266 video, 110 voice) are done or failed with 0 pending, a run stopped with `docker stop` resumes, and a final run does 0 work
+- [x] Check: the 7,047 pending derivatives (5,671 image, 1,266 video, 110 voice) are done or failed with 0 pending, a run stopped with `docker stop` resumes, and a final run does 0 work: all 7,047 done, 0 failed, 6.30 GB of derived files, record counts unchanged (2026-11-16; [baseline](reference/jan4-baseline.json), [notes](reference/README.md#count-check-baseline))
 
 ## 4. Viewer
 
