@@ -380,6 +380,8 @@ impl Builder {
 const HEIC_SAMPLE: &[u8] = include_bytes!("../../media/fixture-32x32.heic");
 /// A tiny invented HEVC video (see fixtures/media/README.md).
 const HEVC_VIDEO_SAMPLE: &[u8] = include_bytes!("../../media/fixture-1s-hevc.mov");
+/// A tiny invented H.264 + AAC video (see fixtures/media/README.md).
+const AAC_VIDEO_SAMPLE: &[u8] = include_bytes!("../../media/fixture-1s-aac.mp4");
 
 const FILLER: &[&str] = &[
     "Did you see the new trail map?",
@@ -787,6 +789,29 @@ pub fn build() -> Scenario {
         "video/quicktime",
         "com.apple.quicktime-movie",
         Some(HEVC_VIDEO_SAMPLE.to_vec()),
+        true,
+        false,
+    );
+    // Two files the image's tools misread as they are (decision 0006): an
+    // animated sticker (HEIF sequence) and a video whose audio has a newer
+    // channel-layout box.
+    b.attach(
+        11,
+        esme,
+        "Sticker.heics",
+        "image/heic-sequence",
+        "public.heics",
+        Some(crate::media::heif_sequence_brand(HEIC_SAMPLE)),
+        true,
+        false,
+    );
+    b.attach(
+        11,
+        me,
+        "IMG_0011.MP4",
+        "video/mp4",
+        "public.mpeg-4",
+        Some(crate::media::with_chnl_v1(AAC_VIDEO_SAMPLE)),
         true,
         false,
     );

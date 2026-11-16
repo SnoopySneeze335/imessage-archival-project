@@ -102,6 +102,8 @@ blobs), thumbnails made and failed, and derivatives pending and failed.
   them if bit rot is a concern.
 - Deleting `blobs/` without deleting `archive.db` leaves rows pointing at
   missing files. Rebuild deletes both (spec, "Export, backup and rebuild").
+- Files reach the tools through `media::input`, and failed derivatives are
+  retried after a decoder fix ([decision 0006](0006-decoder-workarounds.md)).
 - Changing thumbnail settings means bumping `THUMB_RECIPE`. Redoing older
   recipes is a later command.
 - Changing the blob path layout or hash, or letting this step write

@@ -90,13 +90,14 @@ jobs:
           app attachments --backup /backups/fixture --data /data | tee again.txt
           grep -Eq '^  files read +0 ' again.txt
           app stats --json --data /data | tee stats.json
-          # Thumbnails (HEIC and HEVC video included) need the image's own tools.
+          # Thumbnails (HEIC, a HEIF sequence, HEVC video and an MP4 with a
+          # chnl v1 box included) need the image's own tools (decision 0006).
           jq -e '.archive
             | .attachment_files_pending_copy == 0
               and .attachment_files_copied == .attachments_with_file
               and .duplicates_skipped == 1
-              and .thumbnails_made == 6 and .thumbnails_failed == 1
-              and .derivatives_pending == 3' stats.json
+              and .thumbnails_made == 8 and .thumbnails_failed == 1
+              and .derivatives_pending == 5' stats.json
 
       - name: Smoke test logs
         if: failure()

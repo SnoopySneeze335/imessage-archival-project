@@ -1,5 +1,5 @@
 {
-  "archive_schema_version": 3,
+  "archive_schema_version": 4,
   "archive": {
     "sources": 1,
     "import_runs_succeeded": 1,
@@ -27,10 +27,10 @@
     "blobs": 19801,
     "blob_bytes": 43430863802,
     "duplicates_skipped": 5239,
-    "thumbnails_made": 16736,
-    "thumbnails_failed": 28,
+    "thumbnails_made": 16764,
+    "thumbnails_failed": 0,
     "derivatives_pending": 7047,
-    "derivatives_failed": 28
+    "derivatives_failed": 0
   },
   "sources": [
     {

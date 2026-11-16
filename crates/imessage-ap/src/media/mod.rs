@@ -4,7 +4,11 @@
 //! Tools run inside the container only: ImageMagick 6's `convert` (see
 //! decision 0001) for images and HEIC, and ffmpeg for video frames. Each call
 //! is limited to one thread and a timeout, so a damaged file cannot hang an
-//! import; how many run at once (`--jobs`) sets the CPU use.
+//! import; how many run at once (`--jobs`) sets the CPU use. Every file
+//! reaches a tool through [`input::Input`], which works around files the
+//! tools misread.
+
+pub mod input;
 
 use std::{
     io::Read,
@@ -157,43 +161,61 @@ pub fn check_thumbnail_tools() -> Result<(), String> {
 
 /// Writes a WebP thumbnail of `src` to `out`, at most [`THUMB_MAX`] pixels
 /// on its longest side. Images use their first frame, videos their first
-/// video frame. Returns the size of `out`.
-pub fn thumbnail(src: &Path, out: &Path, kind: MediaKind) -> Result<u64, String> {
-    let mut cmd;
+/// video frame. `work_dir` holds a patched copy of `src` while one is needed
+/// (see [`input`]). Returns the size of `out`.
+pub fn thumbnail(src: &Path, out: &Path, kind: MediaKind, work_dir: &Path) -> Result<u64, String> {
+    let input = input::Input::prepare(src, work_dir)?;
     match kind {
         MediaKind::WebImage | MediaKind::Image => {
-            let size = format!("{THUMB_MAX}x{THUMB_MAX}>");
-            cmd = Command::new("convert");
-            cmd.args(["-limit", "thread", "1"])
-                .args(["-limit", "memory", "256MiB"])
-                .args(["-limit", "map", "512MiB"])
-                // Lets libjpeg decode large JPEGs at a reduced scale.
-                .args(["-define", &format!("jpeg:size={0}x{0}", THUMB_MAX * 2)])
-                .arg(format!("{}[0]", src.display()))
-                .args(["-auto-orient", "-thumbnail", &size, "-strip"])
-                .args(["-quality", "80"])
-                .arg(format!("webp:{}", out.display()));
+            match run_tool(image_thumbnail(&input, out), TOOL_TIMEOUT) {
+                Ok(()) => {}
+                // An MP4-family file ImageMagick cannot read, such as a HEIF
+                // sequence with no still image or a video labelled as a
+                // picture: use its first video frame instead.
+                Err(first) if input.container() != input::Container::Other => {
+                    run_tool(video_thumbnail(&input, out), TOOL_TIMEOUT)
+                        .map_err(|second| shorten(&format!("{first}; then {second}")))?;
+                }
+                Err(e) => return Err(e),
+            }
         }
-        MediaKind::Video => {
-            let scale = format!(
-                "scale='min({THUMB_MAX},iw)':'min({THUMB_MAX},ih)':force_original_aspect_ratio=decrease"
-            );
-            cmd = Command::new("ffmpeg");
-            cmd.args(["-nostdin", "-v", "error", "-threads", "1", "-i"])
-                .arg(src)
-                .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale])
-                .args(["-c:v", "libwebp", "-quality", "80", "-f", "webp", "-y"])
-                .arg(out);
-        }
+        MediaKind::Video => run_tool(video_thumbnail(&input, out), TOOL_TIMEOUT)?,
         MediaKind::Voice | MediaKind::Audio | MediaKind::Other => {
             return Err(format!("no thumbnail for {} files", kind.as_str()));
         }
     }
-    run_tool(cmd, TOOL_TIMEOUT)?;
     match std::fs::metadata(out) {
         Ok(m) if m.len() > 0 => Ok(m.len()),
         _ => Err("tool succeeded but wrote no output".to_owned()),
     }
+}
+
+fn image_thumbnail(input: &input::Input, out: &Path) -> Command {
+    let size = format!("{THUMB_MAX}x{THUMB_MAX}>");
+    let mut cmd = Command::new("convert");
+    cmd.args(["-limit", "thread", "1"])
+        .args(["-limit", "memory", "256MiB"])
+        .args(["-limit", "map", "512MiB"])
+        // Lets libjpeg decode large JPEGs at a reduced scale.
+        .args(["-define", &format!("jpeg:size={0}x{0}", THUMB_MAX * 2)])
+        .arg(input.magick_first_frame())
+        .args(["-auto-orient", "-thumbnail", &size, "-strip"])
+        .args(["-quality", "80"])
+        .arg(format!("webp:{}", out.display()));
+    cmd
+}
+
+fn video_thumbnail(input: &input::Input, out: &Path) -> Command {
+    let scale = format!(
+        "scale='min({THUMB_MAX},iw)':'min({THUMB_MAX},ih)':force_original_aspect_ratio=decrease"
+    );
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-nostdin", "-v", "error", "-threads", "1", "-i"])
+        .arg(input.path())
+        .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale])
+        .args(["-c:v", "libwebp", "-quality", "80", "-f", "webp", "-y"])
+        .arg(out);
+    cmd
 }
 
 /// Runs `cmd` with no input, killing it after `timeout`. On failure, returns
