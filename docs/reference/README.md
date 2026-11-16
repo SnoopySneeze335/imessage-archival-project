@@ -30,8 +30,8 @@ real one, so leave it out when updating this file.
 | --- | --- |
 | Source backup | Jan 4, 2026 local backup (`backup_date` 1767575013 = 2026-01-04 17:03 PST) |
 | iOS version | 26.1 |
-| Reader | `imessage-database` 5.0.1, archive schema v3 (Milestone 3a) |
-| Checked | 2026-11-08 (schema v1); 2026-11-15 after migrating to v2 and re-importing; 2026-11-15 fresh v3 import plus attachment files |
+| Reader | `imessage-database` 5.0.1, archive schema v4 (Milestone 3a, decision 0006) |
+| Checked | 2026-11-08 (schema v1); 2026-11-15 after migrating to v2 and re-importing; 2026-11-15 fresh v3 import plus attachment files; 2026-11-16 v4 thumbnail retry |
 
 The v2 check migrated the v1 archive in place and re-imported the backup. The
 re-import added no records and no versions (0 messages changed) and found the
@@ -50,10 +50,13 @@ directory was fresh, and attachment runs are not counted there.
 - `attachment_bytes_copied` is 49,086,254,711, exactly the crate's
   `attachment_bytes_on_disk`. `blob_bytes` is lower (43,430,863,802) because
   5,239 copies were duplicates of 19,801 distinct files.
-- 16,736 thumbnails made and 28 failed. Every image and video blob gets one
-  thumbnail row, and none are left pending. `derivatives_failed` is 28
-  because in schema 3 only thumbnails can fail; the 7,047 pending derivatives
-  (HEIC previews, voice and video conversions) wait for Milestone 3b.
+- 16,764 thumbnails, one for every image and video blob, none pending. The
+  v3 run failed 28 of them on undamaged files: 27 HEIF image sequences and
+  1 MP4 with a `chnl` v1 box ([decision 0006](../decisions/0006-decoder-workarounds.md)).
+  The first `attachments` run on schema v4 retried exactly those 28, read
+  0 files and made all 28, so `thumbnails_failed` and `derivatives_failed`
+  are now 0. The 7,047 pending derivatives (HEIC previews, voice and video
+  conversions) wait for Milestone 3b.
 
 After any change to the ingester, or an upgrade of `imessage-database`, run
 the count check again and compare it with this file (see AGENTS.md). Every
