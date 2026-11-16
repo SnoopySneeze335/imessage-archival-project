@@ -12,7 +12,7 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use common::{archive_db, canonical_dump, count, downgrade_to_v2, issues};
+use common::{archive_db, canonical_dump, count, downgrade_to_v2, downgrade_to_v3, issues};
 use fixture_gen::{Expected, Variant, file_id, generate_variant, scenario};
 use imessage_ap::{
     archive,
@@ -200,6 +200,9 @@ fn thumbnails_are_made_at_import_and_the_rest_is_queued() {
         "IMG_0006.HEIC",
         "IMG_0010.MOV",
         "sticker.png",
+        // Read through the decoder workarounds (decision 0006).
+        "Sticker.heics",
+        "IMG_0011.MP4",
     ] {
         assert_eq!(state(name, "thumb").as_deref(), Some("done"), "{name}");
     }
@@ -225,11 +228,16 @@ fn thumbnails_are_made_at_import_and_the_rest_is_queued() {
         Some("pending")
     );
     assert_eq!(state("IMG_0010.MOV", "video").as_deref(), Some("pending"));
+    assert_eq!(state("IMG_0011.MP4", "video").as_deref(), Some("pending"));
+    assert_eq!(
+        state("Sticker.heics", "preview").as_deref(),
+        Some("pending")
+    );
     assert_eq!(state("IMG_0001.PNG", "preview"), None);
 
     let a = stats::collect(&data).unwrap().archive;
-    assert_eq!((a.thumbnails_made, a.thumbnails_failed), (6, 1));
-    assert_eq!((a.derivatives_pending, a.derivatives_failed), (3, 1));
+    assert_eq!((a.thumbnails_made, a.thumbnails_failed), (8, 1));
+    assert_eq!((a.derivatives_pending, a.derivatives_failed), (5, 1));
 
     // Thumbnails are WebP files at derived/thumb/ab/cd/<sha256>.webp and are
     // never larger than the original's size.
@@ -241,7 +249,7 @@ fn thumbnails_are_made_at_import_and_the_rest_is_queued() {
         .unwrap()
         .map(Result::unwrap)
         .collect();
-    assert_eq!(done.len(), 6);
+    assert_eq!(done.len(), 8);
     for (sha, path, bytes) in done {
         assert_eq!(
             path,
@@ -519,7 +527,53 @@ fn schema_2_archive_migrates_and_then_copies() {
     let data = e.data("migrated");
     ingest::run(&e.v1, &data).unwrap();
     downgrade_to_v2(&archive_db(&data));
-    assert_eq!(archive::migrations().len(), 3);
+    assert_eq!(archive::migrations().len(), 4);
     copy(&e.v1, &data, &Options::default());
     assert!(canonical_dump(&archive_db(&data)) == canonical_dump(&archive_db(&want)));
+}
+
+/// The 3a real check: thumbnails an older decoder failed on are retried once
+/// by the next run after a fix, and only those (decision 0006).
+#[test]
+fn thumbnails_failed_by_an_older_decoder_are_retried_once() {
+    let e = env();
+    let want = e.import("fresh", &[&e.v1]);
+    let data = e.import("old", &[&e.v1]);
+    let files = v1_files();
+    let fixed = [&files["Sticker.heics"], &files["IMG_0011.MP4"]].map(|b| sha256(b));
+
+    // What a 3a archive holds: those two failed, and no decoder column.
+    let db = archive_db(&data);
+    for sha in &fixed {
+        let rel = blobs::derived_relative_path("thumb", sha, "webp");
+        fs::remove_file(data.join(&rel)).unwrap();
+        db.execute(
+            "UPDATE derivative SET status = 'failed', path = NULL, bytes = NULL, error = 'old'
+             WHERE sha256 = ?1 AND kind = 'thumb'",
+            [sha],
+        )
+        .unwrap();
+    }
+    downgrade_to_v3(&db);
+    drop(db);
+
+    let run = copy(&e.v1, &data, &Options::default());
+    assert_eq!(run.counts.files_read, 0);
+    // Both fixed files and the damaged JPEG are tried again; the JPEG still
+    // fails, now recorded against this decoder.
+    assert_eq!(run.counts.thumbnails_retried, 3);
+    assert_eq!(
+        (run.counts.thumbnails_made, run.counts.thumbnails_failed),
+        (2, 1)
+    );
+    let a = stats::collect(&data).unwrap().archive;
+    assert_eq!((a.thumbnails_made, a.thumbnails_failed), (8, 1));
+    assert!(stores(&data) == stores(&want));
+
+    let again = copy(&e.v1, &data, &Options::default());
+    assert_eq!(again.counts.thumbnails_retried, 0);
+    assert_eq!(
+        again.counts.thumbnails_made + again.counts.thumbnails_failed,
+        0
+    );
 }

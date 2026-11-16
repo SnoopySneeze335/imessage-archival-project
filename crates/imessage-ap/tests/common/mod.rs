@@ -256,6 +256,17 @@ pub fn canonical_dump(conn: &Connection) -> String {
 
 /// Turns a current archive back into schema 2 (Milestone 2b): no blobs,
 /// derivatives or file hashes, and no run kinds.
+/// Turns a current archive into what schema 3 (Milestone 3a) left: no record
+/// of which decoder tried each derivative.
+#[allow(dead_code)]
+pub fn downgrade_to_v3(db: &Connection) {
+    db.execute_batch(
+        "ALTER TABLE derivative DROP COLUMN decoder;
+         PRAGMA user_version = 3;",
+    )
+    .unwrap();
+}
+
 pub fn downgrade_to_v2(db: &Connection) {
     db.execute_batch(
         "DELETE FROM import_issue WHERE run_id IN (SELECT id FROM import_run WHERE kind != 'records');

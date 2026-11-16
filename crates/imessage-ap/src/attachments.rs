@@ -89,6 +89,9 @@ pub struct Counts {
     pub read_failures: usize,
     pub thumbnails_made: usize,
     pub thumbnails_failed: usize,
+    /// Failed thumbnails set back to pending because a newer decoder may
+    /// read them ([`media::input::DECODER`]); counted again as made or failed.
+    pub thumbnails_retried: usize,
     /// Previews and conversions queued for the background queue.
     pub derivatives_queued: usize,
     /// Files of this backup still to copy when the run ended.
@@ -409,14 +412,35 @@ struct ThumbResult {
     outcome: Result<u64, String>,
 }
 
+/// Sets failed derivatives of `kind` back to pending when a decoder older
+/// than this build's tried them, so a decoder fix reaches files that failed
+/// before it. Returns how many were set back. The background queue does the
+/// same for its kinds.
+pub fn retry_failed(db: &Connection, kind: &str) -> Result<usize> {
+    Ok(db.execute(
+        "UPDATE derivative SET status = 'pending', error = NULL, made_at = NULL
+         WHERE kind = ?1 AND status = 'failed' AND decoder < ?2",
+        params![kind, media::input::DECODER],
+    )?)
+}
+
 /// Makes every pending thumbnail, `opts.jobs` at a time. This includes ones
-/// an earlier, interrupted run queued but did not make.
+/// an earlier, interrupted run queued but did not make, and failed ones an
+/// older decoder tried.
 fn make_thumbnails(
     db: &Connection,
     data_dir: &Path,
     opts: &Options,
     counts: &mut Counts,
 ) -> Result<()> {
+    counts.thumbnails_retried = retry_failed(db, "thumb")?;
+    if counts.thumbnails_retried > 0 {
+        tracing::info!(
+            thumbnails = counts.thumbnails_retried,
+            decoder = media::input::DECODER,
+            "retrying thumbnails an older decoder could not make"
+        );
+    }
     let jobs: VecDeque<ThumbJob> = db
         .prepare(
             "SELECT d.sha256, b.media_kind FROM derivative d JOIN blob b ON b.sha256 = d.sha256
@@ -440,11 +464,11 @@ fn make_thumbnails(
     let (tx, rx) = mpsc::channel::<ThumbResult>();
 
     let mut done = db.prepare_cached(
-        "UPDATE derivative SET status = 'done', recipe = ?2, path = ?3, bytes = ?4, error = NULL, made_at = ?5
+        "UPDATE derivative SET status = 'done', recipe = ?2, path = ?3, bytes = ?4, error = NULL, made_at = ?5, decoder = ?6
          WHERE sha256 = ?1 AND kind = 'thumb'",
     )?;
     let mut failed = db.prepare_cached(
-        "UPDATE derivative SET status = 'failed', recipe = ?2, error = ?3, made_at = ?4
+        "UPDATE derivative SET status = 'failed', recipe = ?2, error = ?3, made_at = ?4, decoder = ?5
          WHERE sha256 = ?1 AND kind = 'thumb'",
     )?;
 
@@ -459,7 +483,7 @@ fn make_thumbnails(
                     };
                     let src = blobs::blob_path(data_dir, &job.sha256);
                     let tmp = blobs::tmp_path(tmp_dir, ".webp");
-                    let outcome = media::thumbnail(&src, &tmp, job.kind);
+                    let outcome = media::thumbnail(&src, &tmp, job.kind, tmp_dir);
                     let result = ThumbResult {
                         sha256: job.sha256,
                         tmp,
@@ -495,7 +519,8 @@ fn make_thumbnails(
                         media::THUMB_RECIPE,
                         rel,
                         bytes as i64,
-                        now_ns()
+                        now_ns(),
+                        media::input::DECODER
                     ])?;
                     counts.thumbnails_made += 1;
                 }
@@ -504,7 +529,13 @@ fn make_thumbnails(
                     // Store paths relative to the data directory.
                     let why = why.replace(&format!("{}/", data_dir.display()), "");
                     tracing::warn!(sha256 = %r.sha256, "thumbnail failed");
-                    failed.execute(params![r.sha256, media::THUMB_RECIPE, why, now_ns()])?;
+                    failed.execute(params![
+                        r.sha256,
+                        media::THUMB_RECIPE,
+                        why,
+                        now_ns(),
+                        media::input::DECODER
+                    ])?;
                     counts.thumbnails_failed += 1;
                 }
             }

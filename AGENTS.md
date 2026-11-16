@@ -132,6 +132,9 @@ what they cover; to reverse one, add a new record that supersedes it.
   versions, newest-backup-wins, and import-order independence.
 - [0005](docs/decisions/0005-blobs-and-derivatives.md): the blob store,
   resumable crash-safe copies, thumbnails and the derivative queue.
+- [0006](docs/decisions/0006-decoder-workarounds.md): how files reach
+  ImageMagick and ffmpeg (HEIF sequences, `chnl` v1), and retrying failed
+  derivatives after a decoder fix.
 
 ## Dependencies
 

@@ -120,6 +120,73 @@ fn adler32(data: &[u8]) -> u32 {
     (b << 16) | a
 }
 
+/// A HEIF image turned into what ImageMagick 6 sees in an iOS image sequence
+/// (`.heics`): the same bytes with the major brand `msf1`. libheif still
+/// reads it; ImageMagick only does when told the format.
+pub fn heif_sequence_brand(heic: &[u8]) -> Vec<u8> {
+    assert_eq!(&heic[4..8], b"ftyp", "not a HEIF file");
+    let mut out = heic.to_vec();
+    out[8..12].copy_from_slice(b"msf1");
+    out
+}
+
+/// An MP4 with a version-1 `chnl` box (mono layout) appended to its first
+/// audio sample entry, which ffmpeg 6.1 refuses to open. The `moov` box must
+/// come after `mdat`, so growing it moves no sample data.
+pub fn with_chnl_v1(mp4: &[u8]) -> Vec<u8> {
+    let chnl: &[u8] = &[0, 0, 0, 15, b'c', b'h', b'n', b'l', 1, 0, 0, 0, 0x10, 1, 0];
+    // Offsets of the boxes from moov down to the sample entry, then its end.
+    let mut ancestors = Vec::new();
+    let moov = child(mp4, 0, mp4.len(), b"moov").expect("moov");
+    ancestors.push(moov);
+    let (mut entry, mut found) = (0, false);
+    for trak in children(mp4, moov + 8, end(mp4, moov), b"trak") {
+        let mdia = child(mp4, trak + 8, end(mp4, trak), b"mdia").expect("mdia");
+        let hdlr = child(mp4, mdia + 8, end(mp4, mdia), b"hdlr").expect("hdlr");
+        if &mp4[hdlr + 16..hdlr + 20] != b"soun" {
+            continue;
+        }
+        let minf = child(mp4, mdia + 8, end(mp4, mdia), b"minf").expect("minf");
+        let stbl = child(mp4, minf + 8, end(mp4, minf), b"stbl").expect("stbl");
+        let stsd = child(mp4, stbl + 8, end(mp4, stbl), b"stsd").expect("stsd");
+        entry = stsd + 16;
+        ancestors.extend([trak, mdia, minf, stbl, stsd, entry]);
+        found = true;
+        break;
+    }
+    assert!(found, "no audio track");
+    let mdat = child(mp4, 0, mp4.len(), b"mdat").expect("mdat");
+    assert!(mdat < moov, "moov must follow mdat");
+    let at = end(mp4, entry);
+    let mut out = mp4[..at].to_vec();
+    out.extend_from_slice(chnl);
+    out.extend_from_slice(&mp4[at..]);
+    for a in ancestors {
+        let size = u32::from_be_bytes(out[a..a + 4].try_into().unwrap()) + chnl.len() as u32;
+        out[a..a + 4].copy_from_slice(&size.to_be_bytes());
+    }
+    out
+}
+
+fn end(buf: &[u8], at: usize) -> usize {
+    at + u32::from_be_bytes(buf[at..at + 4].try_into().unwrap()) as usize
+}
+
+fn children(buf: &[u8], mut at: usize, stop: usize, kind: &[u8; 4]) -> Vec<usize> {
+    let mut out = Vec::new();
+    while at + 8 <= stop {
+        if &buf[at + 4..at + 8] == kind {
+            out.push(at);
+        }
+        at = end(buf, at);
+    }
+    out
+}
+
+fn child(buf: &[u8], at: usize, stop: usize, kind: &[u8; 4]) -> Option<usize> {
+    children(buf, at, stop, kind).into_iter().next()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

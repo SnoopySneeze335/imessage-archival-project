@@ -240,6 +240,9 @@ fn print_attachments(summary: &imessage_ap::attachments::Summary) {
     println!("  read failures             {:>9}", c.read_failures);
     println!("  thumbnails made           {:>9}", c.thumbnails_made);
     println!("  thumbnails failed         {:>9}", c.thumbnails_failed);
+    if c.thumbnails_retried > 0 {
+        println!("    (retried, decoder fix)  {:>9}", c.thumbnails_retried);
+    }
     println!("  conversions queued        {:>9}", c.derivatives_queued);
     println!("  files still to copy       {:>9}", c.files_pending_at_end);
     println!(
