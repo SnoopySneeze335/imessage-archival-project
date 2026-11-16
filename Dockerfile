@@ -21,6 +21,8 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
 COPY fixtures/generator/ fixtures/generator/
 COPY fixtures/media/ fixtures/media/
+# The generator checks its databases against the real iOS schemas.
+COPY docs/reference/sms-schema.sql docs/reference/addressbook-schema.sql docs/reference/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked -p imessage-ap -p fixture-gen \
