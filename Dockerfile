@@ -20,10 +20,12 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
 COPY fixtures/generator/ fixtures/generator/
+COPY fixtures/media/ fixtures/media/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p imessage-ap \
- && install -D target/release/imessage-ap /out/imessage-ap
+    cargo build --release --locked -p imessage-ap -p fixture-gen \
+ && install -D target/release/imessage-ap /out/imessage-ap \
+ && install -D target/release/make-fixture /out/make-fixture
 
 # --- Runtime ---------------------------------------------------------------
 FROM ubuntu:24.04 AS runtime
@@ -38,8 +40,11 @@ RUN --mount=type=bind,source=fixtures/media/fixture-32x32.heic,target=/tmp/check
     convert /tmp/check.heic png:- | identify - | grep -q ' 32x32 '
 
 COPY --from=rust /out/imessage-ap /usr/local/bin/imessage-ap
+# make-fixture writes the invented demo backup for `demo` (docker/demo.sh).
+COPY --from=rust /out/make-fixture /usr/local/bin/make-fixture
 COPY --from=web /src/web/dist /app/web
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/demo.sh /usr/local/bin/demo.sh
 
 ENV IMESSAGE_AP_PORT=8080 \
     IMESSAGE_AP_DATA=/data \

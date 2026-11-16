@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use common::{archive_db, canonical_dump, count, dump};
 use fixture_gen::{Expected, Variant, generate_variant, scenario};
+use imessage_ap::dirs::Dirs;
 use imessage_ap::{archive, ingest, stats};
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -37,7 +38,7 @@ impl Backups {
         let data = self.dir.path().join(name);
         let counts = order
             .iter()
-            .map(|b| ingest::run(b, &data).unwrap().counts)
+            .map(|b| ingest::run(b, &Dirs::under(&data)).unwrap().counts)
             .collect();
         (data, counts)
     }
@@ -109,7 +110,7 @@ fn two_backups_in_either_order_give_the_same_archive() {
     assert_eq!(fc[1].messages_added, s2 - (s1 - 1));
     assert_eq!(bc[1].messages_added, 1);
 
-    let s = stats::collect(&forward).unwrap();
+    let s = stats::collect(&Dirs::under(&forward)).unwrap();
     assert_eq!(s.archive.messages as usize, s2 + 1);
     assert_eq!(s.archive.messages_with_versions, 2);
     assert_eq!(s.archive.message_versions as usize, s2 + 1 + 2);
@@ -253,7 +254,7 @@ fn reimporting_either_backup_changes_nothing() {
     let (data, _) = b.import("both", &[&b.v1, &b.v2]);
     let before = dump(&archive_db(&data));
     for backup in [&b.v2, &b.v1] {
-        let c = ingest::run(backup, &data).unwrap().counts;
+        let c = ingest::run(backup, &Dirs::under(&data)).unwrap().counts;
         assert_eq!(
             (
                 c.messages_added,
@@ -303,14 +304,14 @@ fn schema_1_archive_migrates_without_reimport() {
 
     // Opening for writing migrates; nothing is lost except the edit history,
     // which the next import of the same backup fills without new versions.
-    drop(archive::open(&data).unwrap());
+    drop(archive::open(&Dirs::under(&data)).unwrap());
     let db = archive_db(&data);
     assert_eq!(
         count(&db, "SELECT COUNT(*) FROM message_version"),
         count(&db, "SELECT COUNT(*) FROM message")
     );
     assert_eq!(count(&db, "SELECT COUNT(*) FROM message_edit"), 0);
-    let c = ingest::run(&b.v1, &data).unwrap().counts;
+    let c = ingest::run(&b.v1, &Dirs::under(&data)).unwrap().counts;
     assert_eq!((c.message_versions_added, c.messages_changed), (0, 0));
     assert!(c.message_edits_added > 0);
     assert!(

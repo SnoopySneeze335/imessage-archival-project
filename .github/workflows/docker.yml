@@ -72,6 +72,24 @@ jobs:
           done
           echo "health: $status"
           test "$status" = healthy
+          # First run: a setup code in the log, and the API needs a session.
+          docker logs smoke 2>&1 | grep -Eq 'setup code: [A-Z0-9]{4}-[A-Z0-9]{4}'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/archive)" = 401
+          curl -fsS http://localhost:8080/api/auth/status | jq -e '.state == "setup" and .https == false'
+
+      - name: Sign in over plain HTTP inside the image
+        run: |
+          printf 'smoke test password\n' | docker exec -i smoke imessage-ap set-password --stdin --data /data
+          code=$(curl -s -o /dev/null -w '%{http_code}' -c jar -H 'Origin: http://localhost:8080' \
+            -H 'Content-Type: application/json' -d '{"password":"smoke test password"}' \
+            http://localhost:8080/api/auth/login)
+          test "$code" = 204
+          grep -q 'session' jar
+          curl -fsS -b jar http://localhost:8080/api/archive | jq -e '.present == false'
+          # A request from another site is refused.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: http://evil.example.com' \
+            -H 'Content-Type: application/json' -d '{"password":"x"}' http://localhost:8080/api/auth/login)
+          test "$code" = 403
 
       - name: Generate the fixture backup
         run: cargo run --locked -p fixture-gen -- --out "$RUNNER_TEMP/backups/fixture"
@@ -121,9 +139,49 @@ jobs:
               and .derivatives.audio.made == 2 and .derivatives.audio.failed == 1
               and .derivative_bytes > 0' stats.json
 
+      - name: Render check on the fixture, with the databases and derived files moved
+        run: |
+          mkdir -p "$RUNNER_TEMP/moved/db" "$RUNNER_TEMP/moved/derived"
+          sudo mv "$RUNNER_TEMP/fixture-data/archive.db" "$RUNNER_TEMP/moved/db/"
+          sudo rm -f "$RUNNER_TEMP/fixture-data/archive.db-wal" "$RUNNER_TEMP/fixture-data/archive.db-shm"
+          sudo mv "$RUNNER_TEMP/fixture-data/derived/"* "$RUNNER_TEMP/moved/derived/"
+          sudo rmdir "$RUNNER_TEMP/fixture-data/derived"
+          app() {
+            docker run --rm -v "$RUNNER_TEMP/fixture-data:/data" \
+              -v "$RUNNER_TEMP/moved/db:/db" -v "$RUNNER_TEMP/moved/derived:/derived" \
+              -e IMESSAGE_AP_DB_DIR=/db -e IMESSAGE_AP_DERIVED_DIR=/derived imessage-ap:smoke "$@"
+          }
+          app stats --json | tee stats.json
+          jq -e '.archive.derivatives_pending == 0 and .archive.messages > 0' stats.json
+          app derive --plan | tee plan.txt
+          app check-render --json | tee render.json
+          jq -e '.render_errors == 0 and .items + .reactions == .messages' render.json
+          # An archive left in the data directory as well is refused.
+          sudo cp "$RUNNER_TEMP/moved/db/archive.db" "$RUNNER_TEMP/fixture-data/"
+          ! app stats > refused.txt 2>&1
+          grep -q 'exists in both' refused.txt
+
+      - name: Demo archive (invented data) inside the image
+        run: |
+          mkdir -p "$RUNNER_TEMP/demo"
+          docker run -d --name demo --cpus=2 -p 8081:8080 -v "$RUNNER_TEMP/demo:/data" imessage-ap:smoke demo
+          for i in $(seq 1 180); do
+            curl -fsS http://localhost:8081/api/health > /dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -fsS http://localhost:8081/api/auth/status | jq -e '.demo == true and .state == "signed_out"'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -c jar -H 'Origin: http://localhost:8081' \
+            -H 'Content-Type: application/json' -d '{"password":"demo1234"}' http://localhost:8081/api/auth/login)
+          test "$code" = 204
+          curl -fsS -b jar http://localhost:8081/api/archive | jq -e '.messages > 25000'
+          docker logs demo 2>&1 | grep -E 'render errors +0'
+          test -z "$(find "$RUNNER_TEMP/demo" \( ! -uid 99 -o ! -gid 100 \) -print)"
+
       - name: Smoke test logs
         if: failure()
-        run: docker logs smoke || true
+        run: |
+          docker logs smoke || true
+          docker logs demo || true
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

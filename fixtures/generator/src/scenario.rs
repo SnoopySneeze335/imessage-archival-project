@@ -81,6 +81,12 @@ pub struct Message {
     pub chat: Option<i64>,
     /// Deleted on the phone but still recoverable (iOS 16+).
     pub recoverable_in: Option<i64>,
+    pub subject: Option<String>,
+    /// Bubble or screen effect (`com.apple.MobileSMS.expressivesend.*`,
+    /// `com.apple.messages.effect.*`).
+    pub expressive_send_style_id: Option<&'static str>,
+    /// An iMessage app's balloon; link previews set theirs from `link_preview`.
+    pub balloon_bundle_id: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +117,8 @@ pub struct Attachment {
     pub created: i64,
     /// File bytes; `None` means the backup does not contain the file.
     pub content: Option<Vec<u8>>,
+    /// `hide_attachment`: iOS keeps the file but does not show it.
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -176,6 +184,7 @@ enum From {
 enum Tapback {
     Loved = 2000,
     Liked = 2001,
+    Disliked = 2002,
     Laughed = 2003,
     Emphasized = 2004,
     Questioned = 2005,
@@ -187,6 +196,7 @@ impl Tapback {
         match self {
             Tapback::Loved => "Loved",
             Tapback::Liked => "Liked",
+            Tapback::Disliked => "Disliked",
             Tapback::Laughed => "Laughed at",
             Tapback::Emphasized => "Emphasized",
             Tapback::Questioned => "Questioned",
@@ -363,6 +373,7 @@ impl Builder {
             is_sticker: sticker,
             created: self.now,
             content,
+            hidden: false,
         });
         arowid
     }
@@ -1030,6 +1041,9 @@ pub fn per_chat_counts(s: &Scenario) -> BTreeMap<String, usize> {
     out
 }
 
+mod demo;
+pub use demo::{LARGE_CHAT_MESSAGES, build_demo};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1042,8 +1056,23 @@ mod tests {
     }
 
     #[test]
+    fn the_large_demo_chat_has_its_messages() {
+        let s = build_demo(true);
+        let n = s
+            .messages
+            .iter()
+            .filter(|m| m.chat == Some(15) && m.associated_message_type == 0)
+            .count();
+        assert_eq!(n, LARGE_CHAT_MESSAGES);
+        let guids: std::collections::BTreeSet<&str> =
+            s.messages.iter().map(|m| m.guid.as_str()).collect();
+        assert_eq!(guids.len(), s.messages.len(), "GUIDs are unique");
+        assert_eq!(build_demo(false).chats.len(), 14);
+    }
+
+    #[test]
     fn numbers_are_fictional() {
-        let s = build();
+        let s = build_demo(false);
         for h in &s.handles {
             if let Some(rest) = h.id.strip_prefix("+1206555") {
                 assert!(rest.starts_with("01") && rest.len() == 4, "{}", h.id);

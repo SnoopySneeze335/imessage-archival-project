@@ -14,6 +14,7 @@ use std::{
 
 use common::{archive_db, canonical_dump, count, downgrade_to_v2, downgrade_to_v3, issues};
 use fixture_gen::{Expected, Variant, file_id, generate_variant, scenario};
+use imessage_ap::dirs::Dirs;
 use imessage_ap::{
     archive,
     attachments::{self, Options, Summary},
@@ -51,7 +52,7 @@ impl Env {
     fn import(&self, name: &str, order: &[&Path]) -> PathBuf {
         let data = self.data(name);
         for b in order {
-            ingest::run(b, &data).unwrap();
+            ingest::run(b, &Dirs::under(&data)).unwrap();
             copy(b, &data, &Options::default());
         }
         data
@@ -59,7 +60,7 @@ impl Env {
 }
 
 fn copy(backup: &Path, data: &Path, opts: &Options) -> Summary {
-    attachments::run(backup, data, opts).unwrap()
+    attachments::run(backup, &Dirs::under(data), opts).unwrap()
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -117,7 +118,7 @@ fn every_file_is_stored_once_by_content() {
     let e = env();
     let data = e.import("data", &[&e.v1]);
     let x = &e.expected;
-    let a = stats::collect(&data).unwrap().archive;
+    let a = stats::collect(&Dirs::under(&data)).unwrap().archive;
     assert_eq!(a.attachment_files_copied as usize, x.attachments_present);
     assert_eq!(a.attachment_bytes_copied, x.attachment_bytes_present);
     assert_eq!(a.attachment_files_pending_copy, 0);
@@ -235,7 +236,7 @@ fn thumbnails_are_made_at_import_and_the_rest_is_queued() {
     );
     assert_eq!(state("IMG_0001.PNG", "preview"), None);
 
-    let a = stats::collect(&data).unwrap().archive;
+    let a = stats::collect(&Dirs::under(&data)).unwrap().archive;
     // Failed: the damaged JPEG, HEIC and MOV.
     assert_eq!((a.thumbnails_made, a.thumbnails_failed), (11, 3));
     assert_eq!((a.derivatives_pending, a.derivatives_failed), (12, 3));
@@ -284,7 +285,7 @@ fn an_interrupted_copy_resumes_to_the_same_result() {
     let whole = e.import("whole", &[&e.v1]);
 
     let data = e.data("resumed");
-    ingest::run(&e.v1, &data).unwrap();
+    ingest::run(&e.v1, &Dirs::under(&data)).unwrap();
     let limited = Options {
         limit: Some(3),
         ..Options::default()
@@ -336,15 +337,15 @@ fn leftovers_of_a_killed_run_are_cleaned_up_or_adopted() {
     let e = env();
     let whole = e.import("whole", &[&e.v1]);
     let data = e.data("killed");
-    ingest::run(&e.v1, &data).unwrap();
+    ingest::run(&e.v1, &Dirs::under(&data)).unwrap();
 
     // What a run killed outright leaves: a half-written temporary file, a
     // blob renamed into place but never recorded, and a run still "running".
-    let tmp = blobs::tmp_dir(&data, blobs::BLOBS_DIR);
+    let tmp = blobs::tmp_dir(&data.join(blobs::BLOBS_DIR));
     fs::create_dir_all(&tmp).unwrap();
     fs::write(tmp.join("123-0"), b"half a file").unwrap();
     let png = &v1_files()["IMG_0001.PNG"];
-    let orphan = blobs::blob_path(&data, &sha256(png));
+    let orphan = blobs::blob_path(&Dirs::under(&data), &sha256(png));
     fs::create_dir_all(orphan.parent().unwrap()).unwrap();
     fs::write(&orphan, png).unwrap();
     archive_db(&data)
@@ -376,8 +377,8 @@ fn backup_folder_is_never_written() {
     let before = tree(&e.v1);
     set_read_only(&e.v1, true);
     let data = e.data("data");
-    let result =
-        ingest::run(&e.v1, &data).map(|_| attachments::run(&e.v1, &data, &Options::default()));
+    let result = ingest::run(&e.v1, &Dirs::under(&data))
+        .map(|_| attachments::run(&e.v1, &Dirs::under(&data), &Options::default()));
     set_read_only(&e.v1, false);
     let summary = result.unwrap().unwrap();
     assert_eq!(summary.counts.read_failures, 0);
@@ -409,7 +410,7 @@ fn set_read_only(root: &Path, read_only: bool) {
 fn an_unreadable_file_is_reported_and_retried() {
     let e = env();
     let data = e.data("data");
-    ingest::run(&e.v1, &data).unwrap();
+    ingest::run(&e.v1, &Dirs::under(&data)).unwrap();
     // The file disappears between ingest and copy.
     let sc = scenario::build();
     let heic = sc
@@ -448,12 +449,12 @@ fn an_unreadable_file_is_reported_and_retried() {
 fn files_need_their_backup_ingested_first() {
     let e = env();
     let data = e.data("data");
-    let err = attachments::run(&e.v1, &data, &Options::default()).unwrap_err();
+    let err = attachments::run(&e.v1, &Dirs::under(&data), &Options::default()).unwrap_err();
     assert!(format!("{err:#}").contains("ingest"), "{err:#}");
-    assert!(!archive::path(&data).exists());
+    assert!(!archive::path(&Dirs::under(&data)).exists());
 
-    ingest::run(&e.v1, &data).unwrap();
-    let err = attachments::run(&e.v2, &data, &Options::default()).unwrap_err();
+    ingest::run(&e.v1, &Dirs::under(&data)).unwrap();
+    let err = attachments::run(&e.v2, &Dirs::under(&data), &Options::default()).unwrap_err();
     assert!(format!("{err:#}").contains("not been imported"), "{err:#}");
 }
 
@@ -476,9 +477,9 @@ fn a_later_backup_fills_a_missing_file_in_either_order() {
         .unwrap();
     assert_eq!(missing, None);
     let sha = sha.unwrap();
-    assert!(blobs::blob_path(&forward, &sha).is_file());
+    assert!(blobs::blob_path(&Dirs::under(&forward), &sha).is_file());
     // Files both backups hold are stored once.
-    let a = stats::collect(&forward).unwrap().archive;
+    let a = stats::collect(&Dirs::under(&forward)).unwrap().archive;
     assert_eq!(a.attachment_files_pending_copy, 0);
     assert_eq!(a.blobs as usize, e.expected.attachment_files_unique);
     assert_eq!(a.duplicates_skipped, a.attachment_files_copied - a.blobs);
@@ -488,10 +489,10 @@ fn a_later_backup_fills_a_missing_file_in_either_order() {
 fn file_runs_leave_the_import_counts_alone() {
     let e = env();
     let data = e.data("data");
-    ingest::run(&e.v1, &data).unwrap();
-    let before = stats::collect(&data).unwrap();
+    ingest::run(&e.v1, &Dirs::under(&data)).unwrap();
+    let before = stats::collect(&Dirs::under(&data)).unwrap();
     copy(&e.v1, &data, &Options::default());
-    let after = stats::collect(&data).unwrap();
+    let after = stats::collect(&Dirs::under(&data)).unwrap();
     assert_eq!(after.archive.import_runs_succeeded, 1);
     assert_eq!(after.archive.import_runs_failed, 0);
     assert_eq!(after.archive.messages, before.archive.messages);
@@ -503,7 +504,7 @@ fn file_runs_leave_the_import_counts_alone() {
 fn stats_and_issues_never_name_files() {
     let e = env();
     let data = e.import("data", &[&e.v1]);
-    let s = stats::collect(&data).unwrap();
+    let s = stats::collect(&Dirs::under(&data)).unwrap();
     let text = stats::render(&s) + &serde_json::to_string(&s).unwrap();
     assert!(text.contains("Unique blobs"));
     let db = archive_db(&data);
@@ -526,7 +527,7 @@ fn schema_2_archive_migrates_and_then_copies() {
     let e = env();
     let want = e.import("fresh", &[&e.v1]);
     let data = e.data("migrated");
-    ingest::run(&e.v1, &data).unwrap();
+    ingest::run(&e.v1, &Dirs::under(&data)).unwrap();
     downgrade_to_v2(&archive_db(&data));
     assert_eq!(archive::migrations().len(), 5);
     copy(&e.v1, &data, &Options::default());
@@ -567,7 +568,7 @@ fn thumbnails_failed_by_an_older_decoder_are_retried_once() {
         (run.counts.thumbnails_made, run.counts.thumbnails_failed),
         (2, 3)
     );
-    let a = stats::collect(&data).unwrap().archive;
+    let a = stats::collect(&Dirs::under(&data)).unwrap().archive;
     assert_eq!((a.thumbnails_made, a.thumbnails_failed), (11, 3));
     assert!(stores(&data) == stores(&want));
 

@@ -36,7 +36,7 @@ fixtures/media/       tiny invented media the generator embeds
 web/                  React app, built to web/dist
 scripts/ci/           repository guards (file size, PII scan)
 scripts/cloud-setup.sh  toolchain setup for cloud sessions
-docker/               container entrypoint
+docker/               container entrypoint, demo.sh (`docker run … demo`)
 docs/                 SPEC.md, ROADMAP.md
 docs/decisions/       decision records (read before changing what they cover)
 docs/reference/       real iOS schemas (no data); the fixture must match them
@@ -54,9 +54,14 @@ cargo fmt --all
 # Fake backups for tests and manual runs -> fixtures/out/ (gitignored)
 cargo run -p fixture-gen -- --out fixtures/out/backup-v1 --force
 cargo run -p fixture-gen -- --out fixtures/out/backup-v2 --variant v2 --force  # later backup
+cargo run -p fixture-gen -- --out fixtures/out/demo --variant demo --large --force  # every message kind
 
-# Server against the built web app
+# Server against the built web app (first run prints a setup code to the log)
 cargo run -p imessage-ap -- serve --port 8080 --data ./data --web web/dist
+cargo run -p imessage-ap -- set-password --data ./data   # or --stdin
+
+# Demo archive of invented data (password demo1234); --prepare only builds the data
+scripts/demo.sh
 
 # Import the fixture and print counts
 cargo run -p imessage-ap -- ingest --backup fixtures/out/backup-v1 --data ./data
@@ -64,10 +69,12 @@ cargo run -p imessage-ap -- attachments --backup fixtures/out/backup-v1 --data .
 cargo run -p imessage-ap -- derive --data ./data --plan  # what derive would do; converts nothing
 cargo run -p imessage-ap -- derive --data ./data   # previews, voice and video conversions; resumable; --kind image|video|voice
 cargo run -p imessage-ap -- stats --data ./data
+cargo run -p imessage-ap -- check-render --data ./data   # every message through the view; counts and GUIDs only
 cargo run -p imessage-ap -- migrate --data ./data   # schema upgrade only (ingest also migrates)
 
 # Web
 cd web && npm ci && npm run typecheck && npm run build   # npm run dev proxies /api to :8080
+cd web && npm run e2e -- --project=chromium   # browser tests; needs cargo build and scripts/demo.sh --prepare
 
 # Guards (CI runs these; run them before pushing)
 scripts/ci/check-file-size.sh
@@ -94,6 +101,10 @@ A change is done when fmt, clippy, the tests, the web build and both guards pass
   `Content-Security-Policy: default-src 'self'`; never loosen it to allow
   another origin. Bundle every asset.
 - Logs never contain message text, names or addresses: log GUIDs and counts.
+  Request logs carry the route pattern only, never query strings or bodies.
+- Screenshots in PRs and issues come from the demo archive only.
+- Nothing before Milestone 9 may need a secure context (clipboard API,
+  `crypto.subtle`, service workers): plain HTTP must keep working.
 - Backup passwords are used for one import run only and never written to disk.
 - Never write anything into a backup folder; `/backups` is mounted read-only.
 
@@ -139,6 +150,12 @@ what they cover; to reverse one, add a new record that supersedes it.
   derivatives after a decoder fix.
 - [0007](docs/decisions/0007-derive-queue.md): the derive queue: what is
   converted for browsers and how, resuming, disk-space guard, `--plan`.
+- [0008](docs/decisions/0008-access-and-sign-in.md): plain HTTP and HTTPS
+  behind a proxy, cookies, setup code, Origin check, rate limiting.
+- [0009](docs/decisions/0009-store-locations.md): a setting per store
+  (databases, blobs, derived, exports) and the two-archives guard.
+- [0010](docs/decisions/0010-render-model.md): the view module,
+  `check-render`, the demo archive and its coverage test.
 
 ## Dependencies
 
@@ -146,8 +163,10 @@ what they cover; to reverse one, add a new record that supersedes it.
   in `web/package.json`. Commit `Cargo.lock` and `package-lock.json`.
 - Add crates to the workspace table, not to a member crate directly.
 - Upgrades are deliberate, in their own PR, and run the fixture tests.
+- **Render check:** after any change to `view/`, ask the user to run
+  `check-render --json` on the real archive and send the counts back.
 - **Count check:** after any change to the ingester (`ingest.rs`, `backup.rs`,
-  `attachments.rs`, `blobs.rs`, `derive.rs`, `media/`, `archive/`) or a crate upgrade, ask the user to re-run the count check on
+  `attachments.rs`, `blobs.rs`, `derive.rs`, `media/`, `archive/`, `dirs.rs`) or a crate upgrade, ask the user to re-run the count check on
   the real backup (`ingest` then `stats --json`) and compare it with
   `docs/reference/jan4-baseline.json`. Explain every difference in the PR.
 

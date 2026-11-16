@@ -52,6 +52,9 @@ pub enum Variant {
     V1,
     /// A later backup of the same phone (`scenario::build_v2`).
     V2,
+    /// The demo: v1 plus the "All message kinds" conversations, and with
+    /// `large` a conversation of 25,000 messages (`scenario::build_demo`).
+    Demo { large: bool },
 }
 
 impl Variant {
@@ -59,13 +62,14 @@ impl Variant {
         match self {
             Variant::V1 => scenario::build(),
             Variant::V2 => scenario::build_v2(),
+            Variant::Demo { large } => scenario::build_demo(large),
         }
     }
 
     /// Unix seconds of the backup.
     pub fn backup_date(self) -> i64 {
         match self {
-            Variant::V1 => utc(2025, 5, 1, 9, 30),
+            Variant::V1 | Variant::Demo { .. } => utc(2025, 5, 1, 9, 30),
             Variant::V2 => utc(2025, 8, 1, 10, 0),
         }
     }

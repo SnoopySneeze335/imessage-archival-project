@@ -29,7 +29,8 @@ use serde::Serialize;
 use crate::{
     archive,
     backup::Backup,
-    blobs::{self, DERIVED_DIR},
+    blobs,
+    dirs::Dirs,
     ingest::IMESSAGE_DATABASE_VERSION,
     media::{self, MediaKind},
 };
@@ -112,16 +113,16 @@ pub struct Summary {
 }
 
 /// Copies the attachment files of `backup_dir`, which must already be
-/// ingested into the archive in `data_dir`, and makes their thumbnails.
-pub fn run(backup_dir: &Path, data_dir: &Path, opts: &Options) -> Result<Summary> {
+/// ingested into the archive, and makes their thumbnails.
+pub fn run(backup_dir: &Path, dirs: &Dirs, opts: &Options) -> Result<Summary> {
     let backup = Backup::open(backup_dir)?;
     anyhow::ensure!(
-        archive::path(data_dir).is_file(),
+        archive::path(dirs).is_file(),
         "no archive at {}; run `imessage-ap ingest` for this backup first",
-        archive::path(data_dir).display()
+        archive::path(dirs).display()
     );
-    let _lock = blobs::lock(data_dir)?;
-    let db = archive::open(data_dir)?;
+    let _lock = blobs::lock(&dirs.db)?;
+    let db = archive::open(dirs)?;
     let source_id: i64 = db
         .query_row(
             "SELECT id FROM source WHERE device_id = ?1 AND backup_date = ?2",
@@ -153,14 +154,14 @@ pub fn run(backup_dir: &Path, data_dir: &Path, opts: &Options) -> Result<Summary
     let mut counts = Counts::default();
     let mut thumbnails_skipped = None;
     let result = (|| -> Result<()> {
-        counts.temporary_files_removed = blobs::reset_tmp(data_dir)?;
-        copy_files(&db, &backup, data_dir, source_id, run_id, opts, &mut counts)?;
+        counts.temporary_files_removed = blobs::reset_tmp(dirs)?;
+        copy_files(&db, &backup, dirs, source_id, run_id, opts, &mut counts)?;
         if !opts.stop.load(Ordering::SeqCst) {
             if let Err(why) = media::check_thumbnail_tools() {
                 tracing::warn!(reason = %why, "thumbnails stay pending");
                 thumbnails_skipped = Some(why);
             } else {
-                make_thumbnails(&db, data_dir, opts, &mut counts)?;
+                make_thumbnails(&db, dirs, opts, &mut counts)?;
             }
         }
         counts.files_pending_at_end = pending_files(&db, source_id)?;
@@ -282,7 +283,7 @@ impl Drop for Batch<'_> {
 fn copy_files(
     db: &Connection,
     backup: &Backup,
-    data_dir: &Path,
+    dirs: &Dirs,
     source_id: i64,
     run_id: i64,
     opts: &Options,
@@ -345,7 +346,7 @@ fn copy_files(
             .join(&w.backup_file_id[..2])
             .join(&w.backup_file_id);
         counts.files_read += 1;
-        let stored = blobs::store(&src, data_dir);
+        let stored = blobs::store(&src, dirs);
         batch.begin()?;
         match stored {
             Err(e) => {
@@ -429,7 +430,7 @@ pub fn retry_failed(db: &Connection, kind: &str) -> Result<usize> {
 /// older decoder tried.
 fn make_thumbnails(
     db: &Connection,
-    data_dir: &Path,
+    dirs: &Dirs,
     opts: &Options,
     counts: &mut Counts,
 ) -> Result<()> {
@@ -460,7 +461,7 @@ fn make_thumbnails(
     let workers = opts.jobs.max(1).min(total);
     tracing::info!(thumbnails = total, workers, "making thumbnails");
     let jobs = Mutex::new(jobs);
-    let tmp_dir = blobs::tmp_dir(data_dir, DERIVED_DIR);
+    let tmp_dir = blobs::tmp_dir(&dirs.derived);
     let (tx, rx) = mpsc::channel::<ThumbResult>();
 
     let mut done = db.prepare_cached(
@@ -481,7 +482,7 @@ fn make_thumbnails(
                     let Some(job) = jobs.lock().expect("job queue").pop_front() else {
                         break;
                     };
-                    let src = blobs::blob_path(data_dir, &job.sha256);
+                    let src = blobs::blob_path(dirs, &job.sha256);
                     let tmp = blobs::tmp_path(tmp_dir, ".webp");
                     let outcome = media::thumbnail(&src, &tmp, job.kind, tmp_dir);
                     let result = ThumbResult {
@@ -510,7 +511,7 @@ fn make_thumbnails(
             match r.outcome {
                 Ok(bytes) => {
                     let rel = blobs::derived_relative_path("thumb", &r.sha256, "webp");
-                    let dest = data_dir.join(&rel);
+                    let dest = dirs.derived_file(&rel);
                     std::fs::create_dir_all(dest.parent().expect("derived paths have a parent"))?;
                     std::fs::rename(&r.tmp, &dest)
                         .with_context(|| format!("moving a thumbnail into {}", dest.display()))?;
@@ -527,7 +528,7 @@ fn make_thumbnails(
                 Err(why) => {
                     let _ = std::fs::remove_file(&r.tmp);
                     // Store paths relative to the data directory.
-                    let why = why.replace(&format!("{}/", data_dir.display()), "");
+                    let why = dirs.shorten(&why);
                     tracing::warn!(sha256 = %r.sha256, "thumbnail failed");
                     failed.execute(params![
                         r.sha256,

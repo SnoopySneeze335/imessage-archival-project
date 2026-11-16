@@ -29,7 +29,8 @@ use serde::Serialize;
 use crate::{
     archive,
     attachments::retry_failed,
-    blobs::{self, DERIVED_DIR},
+    blobs,
+    dirs::Dirs,
     media::{
         self,
         convert::{self, Action, Kind},
@@ -128,16 +129,16 @@ pub struct Summary {
     pub low_disk: Option<LowDisk>,
 }
 
-/// Makes every pending derivative of `opts.kinds` in `data_dir`.
-pub fn run(data_dir: &Path, opts: &Options) -> Result<Summary> {
+/// Makes every pending derivative of `opts.kinds`.
+pub fn run(dirs: &Dirs, opts: &Options) -> Result<Summary> {
     anyhow::ensure!(
-        archive::path(data_dir).is_file(),
+        archive::path(dirs).is_file(),
         "no archive at {}; run `imessage-ap ingest` and `imessage-ap attachments` first",
-        archive::path(data_dir).display()
+        archive::path(dirs).display()
     );
     media::check_conversion_tools().map_err(|why| anyhow::anyhow!(why))?;
-    let _lock = blobs::lock(data_dir)?;
-    let db = archive::open(data_dir)?;
+    let _lock = blobs::lock(&dirs.db)?;
+    let db = archive::open(dirs)?;
 
     // A run that was killed outright never recorded how it ended.
     db.execute(
@@ -160,11 +161,11 @@ pub fn run(data_dir: &Path, opts: &Options) -> Result<Summary> {
     let mut counts = Counts::default();
     let low_disk = Mutex::new(None);
     let result = (|| -> Result<()> {
-        counts.temporary_files_removed = blobs::reset_tmp(data_dir)?;
+        counts.temporary_files_removed = blobs::reset_tmp(dirs)?;
         for &kind in &opts.kinds {
             counts.kind(kind).retried = retry_failed(&db, kind.as_str())?;
         }
-        make_all(&db, data_dir, opts, &mut counts, &low_disk)?;
+        make_all(&db, dirs, opts, &mut counts, &low_disk)?;
         for &kind in &opts.kinds {
             counts.kind(kind).pending_at_end = pending(&db, kind)?;
         }
@@ -265,7 +266,7 @@ struct Outcome {
 
 fn make_all(
     db: &Connection,
-    data_dir: &Path,
+    dirs: &Dirs,
     opts: &Options,
     counts: &mut Counts,
     low_disk: &Mutex<Option<LowDisk>>,
@@ -285,7 +286,7 @@ fn make_all(
     let workers = opts.jobs.max(1).min(total);
     tracing::info!(files = total, workers, kinds = ?opts.kinds.iter().map(|k| k.as_str()).collect::<Vec<_>>(), "converting");
     let jobs = Mutex::new(VecDeque::from(jobs));
-    let tmp_dir = blobs::tmp_dir(data_dir, DERIVED_DIR);
+    let tmp_dir = blobs::tmp_dir(&dirs.derived);
     let (tx, rx) = mpsc::channel::<Outcome>();
     let started = Mutex::new(0usize);
 
@@ -328,7 +329,7 @@ fn make_all(
                         *n += 1;
                         *n
                     };
-                    let src = blobs::blob_path(data_dir, &job.sha256);
+                    let src = blobs::blob_path(dirs, &job.sha256);
                     let tmp = blobs::tmp_path(tmp_dir, &format!(".{}", job.kind.ext()));
                     let result = convert::make(job.kind, &src, &tmp, tmp_dir);
                     // Tests: a stop request that arrives while this file
@@ -372,7 +373,7 @@ fn make_all(
                 }
                 Err(why) => {
                     let _ = std::fs::remove_file(&o.tmp);
-                    let why = why.replace(&format!("{}/", data_dir.display()), "");
+                    let why = dirs.shorten(&why);
                     tracing::warn!(sha256 = %o.sha256, kind = o.kind.as_str(), "conversion failed");
                     batch.begin()?;
                     failed.execute(params![
@@ -394,7 +395,7 @@ fn make_all(
                                 &o.sha256,
                                 o.kind.ext(),
                             );
-                            let dest = data_dir.join(&rel);
+                            let dest = dirs.derived_file(&rel);
                             std::fs::create_dir_all(
                                 dest.parent().expect("derived paths have a parent"),
                             )?;
@@ -570,15 +571,15 @@ pub struct PlanReport {
 /// ones a decoder fix will retry) and projects output size and run time.
 /// Writes nothing to archive.db or the stores. The projections are rough:
 /// see decision 0007 for the rates behind them.
-pub fn plan(data_dir: &Path, opts: &Options) -> Result<PlanReport> {
+pub fn plan(dirs: &Dirs, opts: &Options) -> Result<PlanReport> {
     media::check_conversion_tools().map_err(|why| anyhow::anyhow!(why))?;
-    let _lock = blobs::lock(data_dir)?;
-    let db = archive::open_read_only(data_dir).context("run `imessage-ap migrate` first")?;
+    let _lock = blobs::lock(&dirs.db)?;
+    let db = archive::open_read_only(dirs).context("run `imessage-ap migrate` first")?;
     let mut jobs = work_list(&db, &opts.kinds, true)?;
     if let Some(limit) = opts.limit {
         jobs.truncate(limit);
     }
-    let work_dir = blobs::tmp_dir(data_dir, DERIVED_DIR);
+    let work_dir = blobs::tmp_dir(&dirs.derived);
     std::fs::create_dir_all(&work_dir)?;
     let mut report = PlanReport {
         jobs: opts.jobs.max(1),
@@ -589,7 +590,7 @@ pub fn plan(data_dir: &Path, opts: &Options) -> Result<PlanReport> {
         if opts.stop.load(Ordering::SeqCst) {
             break;
         }
-        let src = blobs::blob_path(data_dir, &job.sha256);
+        let src = blobs::blob_path(dirs, &job.sha256);
         let probed = convert::plan(job.kind, &src, &work_dir);
         let action = probed
             .as_ref()

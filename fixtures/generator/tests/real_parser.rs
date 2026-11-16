@@ -13,12 +13,13 @@ fn scenario_of(variant: Variant) -> scenario::Scenario {
     match variant {
         Variant::V1 => scenario::build(),
         Variant::V2 => scenario::build_v2(),
+        Variant::Demo { large } => scenario::build_demo(large),
     }
 }
 
 #[test]
 fn imessage_database_decodes_every_message() {
-    for variant in [Variant::V1, Variant::V2] {
+    for variant in [Variant::V1, Variant::V2, Variant::Demo { large: false }] {
         let dir = tempfile::tempdir().unwrap();
         let expected = generate_variant(dir.path(), variant).unwrap();
         let id = file_id(SMS_DB.0, SMS_DB.1);

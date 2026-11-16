@@ -4,7 +4,12 @@
   --bg: #ffffff;
   --fg: #1c1c1e;
   --muted: #6e6e73;
+  --card: #f2f2f7;
+  --border: #d1d1d6;
   --accent: #0a84ff;
+  --error: #d70015;
+  --notice: #fff4d6;
+  --notice-fg: #5c4400;
   font-family:
     system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
@@ -14,6 +19,11 @@
     --bg: #000000;
     --fg: #f2f2f7;
     --muted: #98989d;
+    --card: #1c1c1e;
+    --border: #38383a;
+    --error: #ff6961;
+    --notice: #3a3000;
+    --notice-fg: #ffe59a;
   }
 }
 
@@ -25,22 +35,133 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
+  -webkit-text-size-adjust: 100%;
 }
 
-.shell {
-  max-width: 40rem;
-  margin: 0 auto;
-  padding: 3rem 1rem;
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 1rem;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
 }
 
 .muted {
   color: var(--muted);
 }
 
-.status {
-  display: inline-block;
-  padding: 0.4rem 0.8rem;
+.small {
+  font-size: 0.85rem;
+}
+
+.error {
+  color: var(--error);
+}
+
+.notice {
+  background: var(--notice);
+  color: var(--notice-fg);
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.auth {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 1rem max(1rem, env(safe-area-inset-left));
+}
+
+.card {
+  width: 100%;
+  max-width: 24rem;
+  background: var(--card);
   border-radius: 1rem;
+  padding: 1.5rem;
+}
+
+form {
+  display: grid;
+  gap: 0.9rem;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+input {
+  font: inherit;
+  /* 16px or more: iOS Safari does not zoom into the field. */
+  font-size: max(1rem, 16px);
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+button {
+  font: inherit;
+  padding: 0.65rem 1rem;
+  border: 0;
+  border-radius: 0.6rem;
   background: var(--accent);
   color: #fff;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+  padding: 0.4rem 0.6rem;
+}
+
+.home {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+.home header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.home header h1 {
+  margin: 0;
+}
+
+.counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.counts div {
+  background: var(--card);
+  border-radius: 0.8rem;
+  padding: 0.8rem 1rem;
+}
+
+.counts dt {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.counts dd {
+  margin: 0.2rem 0 0;
+  font-size: 1.3rem;
+  font-variant-numeric: tabular-nums;
 }

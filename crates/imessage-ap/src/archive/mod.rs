@@ -1,12 +1,14 @@
 //! archive.db: the rebuildable store of everything imported from backups.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+
+use crate::dirs::Dirs;
 use rusqlite::{Connection, OpenFlags};
 
-/// File name of the archive inside the data directory.
-pub const ARCHIVE_DB: &str = "archive.db";
+/// File name of the archive inside the database directory.
+pub const ARCHIVE_DB: &str = crate::dirs::ARCHIVE_DB;
 
 /// Schema migrations, applied in order. `PRAGMA user_version` records how many
 /// have run. Never edit a released migration; add a new one.
@@ -18,16 +20,17 @@ const MIGRATIONS: &[&str] = &[
     include_str!("0005_derive.sql"),
 ];
 
-/// Path of archive.db inside `data_dir`.
-pub fn path(data_dir: &Path) -> PathBuf {
-    data_dir.join(ARCHIVE_DB)
+/// Path of archive.db.
+pub fn path(dirs: &Dirs) -> PathBuf {
+    dirs.archive_db()
 }
 
 /// Opens (creating if needed) archive.db for writing and migrates it.
-pub fn open(data_dir: &Path) -> Result<Connection> {
-    std::fs::create_dir_all(data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let mut conn = Connection::open(path(data_dir))?;
+pub fn open(dirs: &Dirs) -> Result<Connection> {
+    dirs.check()?;
+    std::fs::create_dir_all(&dirs.db)
+        .with_context(|| format!("creating database directory {}", dirs.db.display()))?;
+    let mut conn = Connection::open(path(dirs))?;
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
@@ -39,8 +42,9 @@ pub fn open(data_dir: &Path) -> Result<Connection> {
 }
 
 /// Opens an existing archive.db without the ability to write.
-pub fn open_read_only(data_dir: &Path) -> Result<Connection> {
-    let p = path(data_dir);
+pub fn open_read_only(dirs: &Dirs) -> Result<Connection> {
+    dirs.check()?;
+    let p = path(dirs);
     anyhow::ensure!(
         p.is_file(),
         "no archive at {} (run `imessage-ap ingest` first)",

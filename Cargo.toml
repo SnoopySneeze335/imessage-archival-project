@@ -12,7 +12,9 @@ rust-version = "1.97"
 # Every version is pinned exactly. Upgrades are deliberate: see AGENTS.md.
 [workspace.dependencies]
 anyhow = "=1.0.104"
+argon2 = "=0.6.0"
 axum = "=0.8.9"
+getrandom = "=0.4.3"
 clap = { version = "=4.6.7", features = ["derive", "env"] }
 imessage-database = "=5.0.1"
 libc = "=0.2.191"

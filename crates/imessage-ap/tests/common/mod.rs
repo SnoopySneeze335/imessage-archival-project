@@ -4,10 +4,11 @@
 use std::path::Path;
 
 use imessage_ap::archive;
+use imessage_ap::dirs::Dirs;
 use rusqlite::{Connection, types::ValueRef};
 
 pub fn archive_db(data: &Path) -> Connection {
-    Connection::open(archive::path(data)).unwrap()
+    Connection::open(archive::path(&Dirs::under(data))).unwrap()
 }
 
 pub fn count(conn: &Connection, sql: &str) -> usize {

@@ -1,0 +1,54 @@
+# Example Docker Compose file for imessage-ap. Copy it to compose.yml and
+# change the host paths on the left of each volume.
+#
+# Every store has its own setting (docs/decisions/0009-store-locations.md).
+# Each defaults to a folder under /data, so only /data is required. This
+# example puts the databases and derived files on an SSD and the original
+# attachment files on a larger, slower disk.
+
+services:
+  imessage-ap:
+    image: ghcr.io/snoopysneeze335/imessage-ap:latest
+    container_name: imessage-ap
+    restart: unless-stopped
+    ports:
+      # Plain HTTP on every interface: http://<lan-ip>:8080 and the tailnet
+      # name both work. For a reverse proxy on the same host only, use
+      # "127.0.0.1:8080:8080" instead.
+      - "8080:8080"
+    environment:
+      PUID: "99"
+      PGID: "100"
+      # Required: originals (blobs/) live here unless moved below.
+      IMESSAGE_AP_DATA: /data
+      # Optional: archive.db, user.db and the run lock. Default: /data.
+      IMESSAGE_AP_DB_DIR: /db
+      # Optional: original attachment files. Default: /data/blobs.
+      # IMESSAGE_AP_BLOBS_DIR: /blobs
+      # Optional: thumbnails, previews and conversions. Default: /data/derived.
+      IMESSAGE_AP_DERIVED_DIR: /db/derived
+      # Optional: exports (Milestone 9). Default: /data/exports.
+      # IMESSAGE_AP_EXPORTS_DIR: /exports
+      # Optional, HTTPS only: the reverse proxy's address or range, so its
+      # X-Forwarded-Proto/-For/-Host headers count (decision 0008). Plain
+      # HTTP needs nothing. Example for a proxy on the Docker host:
+      # IMESSAGE_AP_TRUSTED_PROXIES: 172.17.0.1
+    volumes:
+      - /mnt/user/imessage/data:/data
+      - /mnt/ssd/appdata/imessage-ap:/db
+      # Backups are only needed for `ingest` and `attachments`, never by
+      # the viewer. Always read-only.
+      # - /mnt/user/backups/iphone:/backups:ro
+    # Limits the CPU that `derive` and `attachments` use when run with
+    # `docker exec`; the viewer itself needs little.
+    cpus: 2
+
+  # The demo archive: invented data only, for screenshots and trying things.
+  # Sign in with the password demo1234.
+  # imessage-ap-demo:
+  #   image: ghcr.io/snoopysneeze335/imessage-ap:latest
+  #   command: demo
+  #   ports:
+  #     - "8081:8080"
+  #   volumes:
+  #     - /mnt/user/imessage/demo:/data

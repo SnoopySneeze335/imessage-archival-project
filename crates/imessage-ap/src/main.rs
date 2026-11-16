@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use imessage_ap::server;
+use imessage_ap::{dirs::Dirs, server};
 use tracing_subscriber::EnvFilter;
 
 /// Self-hosted archive and viewer for iMessage history.
@@ -31,12 +31,29 @@ enum Command {
         /// Port to listen on.
         #[arg(long, env = "IMESSAGE_AP_PORT", default_value_t = 8080)]
         port: u16,
-        /// Data directory (archive.db, user.db, blobs, derived files).
-        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
-        data: PathBuf,
+        #[command(flatten)]
+        dirs: DirArgs,
         /// Directory with the built web app.
         #[arg(long, env = "IMESSAGE_AP_WEB", default_value = "/app/web")]
         web: PathBuf,
+        /// Reverse proxies (addresses or CIDR ranges, comma-separated) whose
+        /// X-Forwarded-Proto, -For and -Host headers are believed. Needed only
+        /// for HTTPS through a proxy such as tailscale serve or Nginx Proxy
+        /// Manager; plain HTTP needs nothing.
+        #[arg(long, env = "IMESSAGE_AP_TRUSTED_PROXIES", default_value = "", value_parser = parse_proxies)]
+        trusted_proxies: ProxyList,
+        /// Mark the sign-in page as the demo archive of invented data.
+        #[arg(long, env = "IMESSAGE_AP_DEMO")]
+        demo: bool,
+    },
+    /// Set or replace the password, and sign out every browser. Asks twice
+    /// on the terminal, or reads one line from standard input with --stdin.
+    SetPassword {
+        #[command(flatten)]
+        dirs: DirArgs,
+        /// Read the password from standard input instead of the terminal.
+        #[arg(long)]
+        stdin: bool,
     },
     /// Exit 0 if the local server answers /api/health (used by Docker).
     Healthcheck {
@@ -50,9 +67,8 @@ enum Command {
         /// Backup folder (the one containing Manifest.db).
         #[arg(long)]
         backup: PathBuf,
-        /// Data directory; archive.db is created here.
-        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
-        data: PathBuf,
+        #[command(flatten)]
+        dirs: DirArgs,
     },
     /// Copy an ingested backup's attachment files into the data directory's
     /// blob store, once per distinct content, and make their thumbnails.
@@ -62,9 +78,8 @@ enum Command {
         /// Backup folder (the one containing Manifest.db), already ingested.
         #[arg(long)]
         backup: PathBuf,
-        /// Data directory containing archive.db; files go to blobs/ and derived/.
-        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
-        data: PathBuf,
+        #[command(flatten)]
+        dirs: DirArgs,
         /// Thumbnails made at once. Defaults to the CPUs available, which
         /// follows a container's --cpus limit.
         #[arg(long)]
@@ -79,9 +94,8 @@ enum Command {
     /// derived/. Resumable: a stopped run continues where it left off, and
     /// running it again with nothing pending does nothing.
     Derive {
-        /// Data directory containing archive.db and blobs/.
-        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
-        data: PathBuf,
+        #[command(flatten)]
+        dirs: DirArgs,
         /// Work on one kind only: image (HEIC and other previews), video or
         /// voice (voice messages). Default: voice, then image, then video.
         #[arg(long, value_enum)]
@@ -106,20 +120,75 @@ enum Command {
     /// Upgrade archive.db to this build's schema, then exit. Ingest does the
     /// same on its own; this only migrates, so stats can be checked first.
     Migrate {
-        /// Data directory containing archive.db.
-        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
-        data: PathBuf,
+        #[command(flatten)]
+        dirs: DirArgs,
+    },
+    /// Run every message through the view the web app draws from, and print
+    /// counts per kind and state, with GUIDs for problems. Prints no message
+    /// content, names or addresses.
+    CheckRender {
+        #[command(flatten)]
+        dirs: DirArgs,
+        /// Print JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+        /// GUIDs to list per problem.
+        #[arg(long, default_value_t = 20)]
+        guids: usize,
+        /// List every problem GUID.
+        #[arg(long)]
+        all_guids: bool,
     },
     /// Print archive counts (no message content) for comparison with the
     /// backup diagnostics in docs/SPEC.md.
     Stats {
-        /// Data directory containing archive.db.
-        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
-        data: PathBuf,
+        #[command(flatten)]
+        dirs: DirArgs,
         /// Print JSON instead of a table.
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Trusted proxy ranges from the command line.
+#[derive(Debug, Clone, Default)]
+struct ProxyList(Vec<imessage_ap::auth::IpRange>);
+
+fn parse_proxies(s: &str) -> Result<ProxyList, String> {
+    imessage_ap::auth::parse_proxies(s).map(ProxyList)
+}
+
+/// Where the stores are (decision 0009). Each defaults to the data
+/// directory or a folder in it.
+#[derive(Debug, Clone, clap::Args)]
+struct DirArgs {
+    /// Data directory: the default home of every store below.
+    #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
+    data: PathBuf,
+    /// Folder for archive.db and user.db [default: the data directory].
+    #[arg(long, env = "IMESSAGE_AP_DB_DIR")]
+    db_dir: Option<PathBuf>,
+    /// Folder for original attachment files [default: <data>/blobs].
+    #[arg(long, env = "IMESSAGE_AP_BLOBS_DIR")]
+    blobs_dir: Option<PathBuf>,
+    /// Folder for thumbnails, previews and conversions [default: <data>/derived].
+    #[arg(long, env = "IMESSAGE_AP_DERIVED_DIR")]
+    derived_dir: Option<PathBuf>,
+    /// Folder for exports [default: <data>/exports].
+    #[arg(long, env = "IMESSAGE_AP_EXPORTS_DIR")]
+    exports_dir: Option<PathBuf>,
+}
+
+impl DirArgs {
+    fn dirs(&self) -> Dirs {
+        Dirs::new(
+            &self.data,
+            self.db_dir.as_deref(),
+            self.blobs_dir.as_deref(),
+            self.derived_dir.as_deref(),
+            self.exports_dir.as_deref(),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -171,12 +240,22 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Serve {
             bind,
             port,
-            data,
+            dirs,
             web,
+            trusted_proxies,
+            demo,
         } => {
-            std::fs::create_dir_all(&data)
-                .with_context(|| format!("creating data directory {}", data.display()))?;
-            let app = server::router(&server::Config { web_dir: web });
+            let dirs = dirs.dirs();
+            std::fs::create_dir_all(&dirs.data)
+                .with_context(|| format!("creating data directory {}", dirs.data.display()))?;
+            dirs.check()?;
+            let state = server::AppState::new(server::Config {
+                web_dir: web,
+                dirs,
+                trusted_proxies: trusted_proxies.0,
+                demo,
+            })?;
+            let app = server::router(state).into_make_service_with_connect_info::<SocketAddr>();
             let addr = SocketAddr::new(bind, port);
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
@@ -188,8 +267,26 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Healthcheck { port } => healthcheck(port),
-        Command::Ingest { backup, data } => {
-            let summary = imessage_ap::ingest::run(&backup, &data)?;
+        Command::SetPassword { dirs, stdin } => {
+            let password = if stdin {
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                line.trim_end_matches(['\r', '\n']).to_owned()
+            } else {
+                let first = read_hidden("New password: ")?;
+                let again = read_hidden("Again: ")?;
+                anyhow::ensure!(first == again, "the two passwords differ; nothing changed");
+                first
+            };
+            imessage_ap::auth::validate_new_password(&password).map_err(|e| anyhow::anyhow!(e))?;
+            let hash = imessage_ap::auth::hash_password(&password)?;
+            let user = imessage_ap::userdb::open(&dirs.dirs())?;
+            imessage_ap::userdb::set_password_hash(&user, &hash)?;
+            println!("Password set. Every browser is signed out.");
+            Ok(())
+        }
+        Command::Ingest { backup, dirs } => {
+            let summary = imessage_ap::ingest::run(&backup, &dirs.dirs())?;
             let c = &summary.counts;
             println!(
                 "Import run {} (backup {}) succeeded",
@@ -225,10 +322,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Command::Attachments {
             backup,
-            data,
+            dirs,
             jobs,
             limit,
         } => {
+            let dirs = dirs.dirs();
             let opts = imessage_ap::attachments::Options {
                 jobs: jobs.unwrap_or_else(imessage_ap::attachments::default_jobs),
                 limit,
@@ -236,20 +334,21 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             };
             tokio::spawn(stop_on_signal(opts.stop.clone()));
             let summary = tokio::task::spawn_blocking(move || {
-                imessage_ap::attachments::run(&backup, &data, &opts)
+                imessage_ap::attachments::run(&backup, &dirs, &opts)
             })
             .await??;
             print_attachments(&summary);
             Ok(())
         }
         Command::Derive {
-            data,
+            dirs,
             kind,
             jobs,
             limit,
             min_free,
             plan,
         } => {
+            let dirs = dirs.dirs();
             let opts = imessage_ap::derive::Options {
                 jobs: jobs.unwrap_or_else(imessage_ap::attachments::default_jobs),
                 kinds: kind.map_or_else(
@@ -264,13 +363,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             tokio::spawn(stop_on_signal(opts.stop.clone()));
             if plan {
                 let report =
-                    tokio::task::spawn_blocking(move || imessage_ap::derive::plan(&data, &opts))
+                    tokio::task::spawn_blocking(move || imessage_ap::derive::plan(&dirs, &opts))
                         .await??;
                 print_plan(&report);
                 return Ok(());
             }
             let summary =
-                tokio::task::spawn_blocking(move || imessage_ap::derive::run(&data, &opts))
+                tokio::task::spawn_blocking(move || imessage_ap::derive::run(&dirs, &opts))
                     .await??;
             print_derive(&summary);
             if let Some(l) = &summary.low_disk {
@@ -282,7 +381,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Migrate { data } => {
+        Command::Migrate { dirs } => {
+            let data = dirs.dirs();
             anyhow::ensure!(
                 imessage_ap::archive::path(&data).is_file(),
                 "no archive at {}",
@@ -295,8 +395,31 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Stats { data, json } => {
-            let stats = imessage_ap::stats::collect(&data)?;
+        Command::CheckRender {
+            dirs,
+            json,
+            guids,
+            all_guids,
+        } => {
+            let db = imessage_ap::archive::open_read_only(&dirs.dirs())?;
+            let opts = imessage_ap::view::check::Options {
+                guids: if all_guids { usize::MAX } else { guids },
+            };
+            let report = imessage_ap::view::check::run(&db, opts)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", imessage_ap::view::check::render(&report));
+            }
+            anyhow::ensure!(
+                report.render_errors == 0,
+                "{} messages could not be drawn",
+                report.render_errors
+            );
+            Ok(())
+        }
+        Command::Stats { dirs, json } => {
+            let stats = imessage_ap::stats::collect(&dirs.dirs())?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
             } else {
@@ -435,6 +558,37 @@ async fn stop_on_signal(stop: Arc<AtomicBool>) {
         }
         tracing::warn!("stopping after the current file; press Ctrl-C again to quit now");
     }
+}
+
+/// Reads a line from the terminal without echoing it.
+fn read_hidden(prompt: &str) -> anyhow::Result<String> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let stdin = std::io::stdin();
+    anyhow::ensure!(
+        stdin.is_terminal(),
+        "no terminal to ask on; run with `docker exec -it`, or pass --stdin"
+    );
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    let fd = libc::STDIN_FILENO;
+    // SAFETY: termios is plain data; tcgetattr fills it for a valid fd.
+    let mut term: libc::termios = unsafe { std::mem::zeroed() };
+    let saved = unsafe { libc::tcgetattr(fd, &mut term) } == 0;
+    let original = term;
+    if saved {
+        term.c_lflag &= !libc::ECHO;
+        // SAFETY: fd is the terminal; term came from tcgetattr.
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &term) };
+    }
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line);
+    if saved {
+        // SAFETY: restores the settings read above.
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) };
+    }
+    eprintln!();
+    read?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_owned())
 }
 
 /// Minimal HTTP/1.0 GET against localhost, so the image needs no curl.

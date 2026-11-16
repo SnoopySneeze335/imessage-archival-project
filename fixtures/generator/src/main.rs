@@ -13,10 +13,13 @@ struct Args {
     /// Delete the output folder first if it exists.
     #[arg(long)]
     force: bool,
-    /// Which backup to write: v1 (first) or v2 (a later backup of the same
-    /// phone).
-    #[arg(long, default_value = "v1", value_parser = ["v1", "v2"])]
+    /// Which backup to write: v1 (first), v2 (a later backup of the same
+    /// phone) or demo (v1 plus the "All message kinds" conversations).
+    #[arg(long, default_value = "v1", value_parser = ["v1", "v2", "demo"])]
     variant: String,
+    /// With --variant demo: add a conversation of 25,000 messages.
+    #[arg(long)]
+    large: bool,
 }
 
 fn main() -> Result<()> {
@@ -26,8 +29,13 @@ fn main() -> Result<()> {
     }
     let variant = match args.variant.as_str() {
         "v2" => fixture_gen::Variant::V2,
+        "demo" => fixture_gen::Variant::Demo { large: args.large },
         _ => fixture_gen::Variant::V1,
     };
+    anyhow::ensure!(
+        !args.large || matches!(variant, fixture_gen::Variant::Demo { .. }),
+        "--large needs --variant demo"
+    );
     let expected = fixture_gen::generate_variant(&args.out, variant)?;
     println!(
         "wrote {}: {} messages, {} chats, {} handles, {} attachments ({} missing)",
