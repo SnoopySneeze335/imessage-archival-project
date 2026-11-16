@@ -7,6 +7,7 @@ pub mod archive;
 pub mod attachments;
 pub mod backup;
 pub mod blobs;
+pub mod derive;
 pub mod ingest;
 pub mod media;
 pub mod server;

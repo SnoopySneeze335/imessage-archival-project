@@ -60,10 +60,13 @@ Split into two PRs ([decision 0005](decisions/0005-blobs-and-derivatives.md)).
 - [x] Check: 25,040 attachment records have files and are copied; 2,654 are flagged missing
 - [x] Check: the 28 thumbnails that failed (27 HEIF sequences, 1 MP4 with `chnl` v1) are made on the next run ([decision 0006](decisions/0006-decoder-workarounds.md))
 
-**3b: background queue**
+**3b: background queue** ([decision 0007](decisions/0007-derive-queue.md))
 
-- [ ] `imessage-ap derive`: the queue, resumable, CPU-limited; reads files through `media::input` and retries failures after a decoder fix ([decision 0006](decisions/0006-decoder-workarounds.md))
-- [ ] HEIC to web formats; voice messages (CAF) and video conversion
+- [x] `imessage-ap derive`: the queue, resumable, CPU-limited; reads files through `media::input` and retries failures after a decoder fix ([decision 0006](decisions/0006-decoder-workarounds.md))
+- [x] HEIC to web formats; voice messages (CAF) and video conversion: only what browsers cannot use, remuxed when only the container is wrong
+- [x] `--kind`, `--limit`, `--min-free` and `--plan`; stats per derivative kind and total derivative bytes
+- [x] Fixture: an AAC voice message in CAF, an HDR (HLG) HEVC video, a browser-ready MP4, a PNG labelled HEIC, and a damaged file of each converted kind
+- [ ] Check: the 7,047 pending derivatives (5,671 image, 1,266 video, 110 voice) are done or failed with 0 pending, a run stopped with `docker stop` resumes, and a final run does 0 work
 
 ## 4. Viewer
 

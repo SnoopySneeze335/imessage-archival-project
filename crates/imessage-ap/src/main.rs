@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use imessage_ap::server;
 use tracing_subscriber::EnvFilter;
 
@@ -73,6 +73,36 @@ enum Command {
         #[arg(long)]
         limit: Option<usize>,
     },
+    /// Make image previews and audio/video conversions from the files in
+    /// the blob store, for what browsers cannot show or play as it is.
+    /// Reads only archive.db and blobs/ (no backup needed) and writes to
+    /// derived/. Resumable: a stopped run continues where it left off, and
+    /// running it again with nothing pending does nothing.
+    Derive {
+        /// Data directory containing archive.db and blobs/.
+        #[arg(long, env = "IMESSAGE_AP_DATA", default_value = "/data")]
+        data: PathBuf,
+        /// Work on one kind only: image (HEIC and other previews), video or
+        /// voice (voice messages). Default: voice, then image, then video.
+        #[arg(long, value_enum)]
+        kind: Option<DeriveKind>,
+        /// Files converted at once. Defaults to the CPUs available, which
+        /// follows a container's --cpus limit.
+        #[arg(long)]
+        jobs: Option<usize>,
+        /// Stop after starting this many files.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Free space to keep on the disk holding derived/, in binary units
+        /// as `df -h` shows them (20G = 20 GiB). The run stops cleanly
+        /// before a file could take it below this.
+        #[arg(long, default_value = "5G", value_parser = imessage_ap::derive::parse_size)]
+        min_free: u64,
+        /// Only report what a run would do: files per kind and action, with
+        /// projected output size and run time. Converts nothing.
+        #[arg(long)]
+        plan: bool,
+    },
     /// Upgrade archive.db to this build's schema, then exit. Ingest does the
     /// same on its own; this only migrates, so stats can be checked first.
     Migrate {
@@ -90,6 +120,33 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DeriveKind {
+    Image,
+    Video,
+    Voice,
+}
+
+impl DeriveKind {
+    fn kind(self) -> imessage_ap::media::convert::Kind {
+        use imessage_ap::media::convert::Kind;
+        match self {
+            Self::Image => Kind::Preview,
+            Self::Video => Kind::Video,
+            Self::Voice => Kind::Audio,
+        }
+    }
+}
+
+/// The name a derivative kind has on the command line.
+fn kind_label(kind: &str) -> &str {
+    match kind {
+        "preview" => "image",
+        "audio" => "voice",
+        other => other,
+    }
 }
 
 #[tokio::main]
@@ -185,6 +242,46 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             print_attachments(&summary);
             Ok(())
         }
+        Command::Derive {
+            data,
+            kind,
+            jobs,
+            limit,
+            min_free,
+            plan,
+        } => {
+            let opts = imessage_ap::derive::Options {
+                jobs: jobs.unwrap_or_else(imessage_ap::attachments::default_jobs),
+                kinds: kind.map_or_else(
+                    || imessage_ap::media::convert::Kind::ALL.to_vec(),
+                    |k| vec![k.kind()],
+                ),
+                limit,
+                min_free,
+                stop: Arc::new(AtomicBool::new(false)),
+                stop_after: None,
+            };
+            tokio::spawn(stop_on_signal(opts.stop.clone()));
+            if plan {
+                let report =
+                    tokio::task::spawn_blocking(move || imessage_ap::derive::plan(&data, &opts))
+                        .await??;
+                print_plan(&report);
+                return Ok(());
+            }
+            let summary =
+                tokio::task::spawn_blocking(move || imessage_ap::derive::run(&data, &opts))
+                    .await??;
+            print_derive(&summary);
+            if let Some(l) = &summary.low_disk {
+                anyhow::bail!(
+                    "stopped to keep free space: {:.1} GiB free on the disk of derived/, {:.1} GiB needed; free some space (or let the mover run) and run again",
+                    l.free as f64 / f64::from(1u32 << 30),
+                    l.needed as f64 / f64::from(1u32 << 30)
+                );
+            }
+            Ok(())
+        }
         Command::Migrate { data } => {
             anyhow::ensure!(
                 imessage_ap::archive::path(&data).is_file(),
@@ -252,6 +349,80 @@ fn print_attachments(summary: &imessage_ap::attachments::Summary) {
     if let Some(why) = &summary.thumbnails_skipped {
         println!("  thumbnails skipped: {why}");
     }
+}
+
+fn print_derive(summary: &imessage_ap::derive::Summary) {
+    let c = &summary.counts;
+    let state = if summary.low_disk.is_some() {
+        "stopped for disk space; run the same command again once there is room"
+    } else if summary.interrupted {
+        "was interrupted; run the same command again to resume"
+    } else {
+        "succeeded"
+    };
+    println!("Derive run {} {state}", summary.run_id);
+    println!("  files started             {:>9}", c.files_started);
+    println!(
+        "  {:<8}{:>9}{:>9}{:>9}{:>9}{:>9}{:>12}{:>9}",
+        "kind", "pending", "retried", "made", "original", "failed", "MB written", "left"
+    );
+    for (kind, k) in &c.kinds {
+        println!(
+            "  {:<8}{:>9}{:>9}{:>9}{:>9}{:>9}{:>12.1}{:>9}",
+            kind_label(kind),
+            k.pending_at_start,
+            k.retried,
+            k.made,
+            k.original,
+            k.failed,
+            k.bytes_written as f64 / 1e6,
+            k.pending_at_end
+        );
+    }
+}
+
+fn print_plan(report: &imessage_ap::derive::PlanReport) {
+    let gb = |b: u64| b as f64 / 1e9;
+    let hours = |s: f64| s / 3600.0 / report.jobs as f64;
+    println!(
+        "Derive plan (nothing converted; projections are rough, for {} jobs)",
+        report.jobs
+    );
+    println!(
+        "  {:<7}{:<12}{:>7}{:>10}{:>10}{:>16}{:>14}",
+        "kind", "action", "files", "input GB", "length h", "output GB", "time h"
+    );
+    let (mut out, mut time) = ((0u64, 0u64), (0f64, 0f64));
+    for (kind, actions) in &report.rows {
+        for (action, r) in actions {
+            println!(
+                "  {:<7}{:<12}{:>7}{:>10.2}{:>10.1}{:>16}{:>14}",
+                kind_label(kind),
+                action,
+                r.files,
+                gb(r.input_bytes),
+                r.seconds / 3600.0,
+                format!("{:.2}–{:.2}", gb(r.output_bytes.0), gb(r.output_bytes.1)),
+                format!(
+                    "{:.1}–{:.1}",
+                    hours(r.cpu_seconds.0),
+                    hours(r.cpu_seconds.1)
+                ),
+            );
+            out = (out.0 + r.output_bytes.0, out.1 + r.output_bytes.1);
+            time = (time.0 + r.cpu_seconds.0, time.1 + r.cpu_seconds.1);
+        }
+    }
+    println!(
+        "  {:<7}{:<12}{:>7}{:>10}{:>10}{:>16}{:>14}",
+        "total",
+        "",
+        "",
+        "",
+        "",
+        format!("{:.2}–{:.2}", gb(out.0), gb(out.1)),
+        format!("{:.1}–{:.1}", hours(time.0), hours(time.1)),
+    );
 }
 
 /// First Ctrl-C or SIGTERM: finish the current file and stop cleanly.

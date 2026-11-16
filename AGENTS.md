@@ -61,6 +61,8 @@ cargo run -p imessage-ap -- serve --port 8080 --data ./data --web web/dist
 # Import the fixture and print counts
 cargo run -p imessage-ap -- ingest --backup fixtures/out/backup-v1 --data ./data
 cargo run -p imessage-ap -- attachments --backup fixtures/out/backup-v1 --data ./data  # files + thumbnails; resumable
+cargo run -p imessage-ap -- derive --data ./data --plan  # what derive would do; converts nothing
+cargo run -p imessage-ap -- derive --data ./data   # previews, voice and video conversions; resumable; --kind image|video|voice
 cargo run -p imessage-ap -- stats --data ./data
 cargo run -p imessage-ap -- migrate --data ./data   # schema upgrade only (ingest also migrates)
 
@@ -135,6 +137,8 @@ what they cover; to reverse one, add a new record that supersedes it.
 - [0006](docs/decisions/0006-decoder-workarounds.md): how files reach
   ImageMagick and ffmpeg (HEIF sequences, `chnl` v1), and retrying failed
   derivatives after a decoder fix.
+- [0007](docs/decisions/0007-derive-queue.md): the derive queue: what is
+  converted for browsers and how, resuming, disk-space guard, `--plan`.
 
 ## Dependencies
 
@@ -143,7 +147,7 @@ what they cover; to reverse one, add a new record that supersedes it.
 - Add crates to the workspace table, not to a member crate directly.
 - Upgrades are deliberate, in their own PR, and run the fixture tests.
 - **Count check:** after any change to the ingester (`ingest.rs`, `backup.rs`,
-  `attachments.rs`, `blobs.rs`, `archive/`) or a crate upgrade, ask the user to re-run the count check on
+  `attachments.rs`, `blobs.rs`, `derive.rs`, `media/`, `archive/`) or a crate upgrade, ask the user to re-run the count check on
   the real backup (`ingest` then `stats --json`) and compare it with
   `docs/reference/jan4-baseline.json`. Explain every difference in the PR.
 

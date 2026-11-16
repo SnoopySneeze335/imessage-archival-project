@@ -236,8 +236,9 @@ fn thumbnails_are_made_at_import_and_the_rest_is_queued() {
     assert_eq!(state("IMG_0001.PNG", "preview"), None);
 
     let a = stats::collect(&data).unwrap().archive;
-    assert_eq!((a.thumbnails_made, a.thumbnails_failed), (8, 1));
-    assert_eq!((a.derivatives_pending, a.derivatives_failed), (5, 1));
+    // Failed: the damaged JPEG, HEIC and MOV.
+    assert_eq!((a.thumbnails_made, a.thumbnails_failed), (11, 3));
+    assert_eq!((a.derivatives_pending, a.derivatives_failed), (12, 3));
 
     // Thumbnails are WebP files at derived/thumb/ab/cd/<sha256>.webp and are
     // never larger than the original's size.
@@ -249,7 +250,7 @@ fn thumbnails_are_made_at_import_and_the_rest_is_queued() {
         .unwrap()
         .map(Result::unwrap)
         .collect();
-    assert_eq!(done.len(), 8);
+    assert_eq!(done.len(), 11);
     for (sha, path, bytes) in done {
         assert_eq!(
             path,
@@ -527,7 +528,7 @@ fn schema_2_archive_migrates_and_then_copies() {
     let data = e.data("migrated");
     ingest::run(&e.v1, &data).unwrap();
     downgrade_to_v2(&archive_db(&data));
-    assert_eq!(archive::migrations().len(), 4);
+    assert_eq!(archive::migrations().len(), 5);
     copy(&e.v1, &data, &Options::default());
     assert!(canonical_dump(&archive_db(&data)) == canonical_dump(&archive_db(&want)));
 }
@@ -559,15 +560,15 @@ fn thumbnails_failed_by_an_older_decoder_are_retried_once() {
 
     let run = copy(&e.v1, &data, &Options::default());
     assert_eq!(run.counts.files_read, 0);
-    // Both fixed files and the damaged JPEG are tried again; the JPEG still
-    // fails, now recorded against this decoder.
-    assert_eq!(run.counts.thumbnails_retried, 3);
+    // Both fixed files and the three damaged ones are tried again; the
+    // damaged ones still fail, now recorded against this decoder.
+    assert_eq!(run.counts.thumbnails_retried, 5);
     assert_eq!(
         (run.counts.thumbnails_made, run.counts.thumbnails_failed),
-        (2, 1)
+        (2, 3)
     );
     let a = stats::collect(&data).unwrap().archive;
-    assert_eq!((a.thumbnails_made, a.thumbnails_failed), (8, 1));
+    assert_eq!((a.thumbnails_made, a.thumbnails_failed), (11, 3));
     assert!(stores(&data) == stores(&want));
 
     let again = copy(&e.v1, &data, &Options::default());

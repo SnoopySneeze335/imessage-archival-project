@@ -8,6 +8,7 @@
 //! reaches a tool through [`input::Input`], which works around files the
 //! tools misread.
 
+pub mod convert;
 pub mod input;
 
 use std::{
@@ -22,7 +23,8 @@ pub const THUMB_MAX: u32 = 400;
 /// Version of the thumbnail settings below. Bump it when they change, so
 /// existing thumbnails can be told apart from ones the new settings make.
 pub const THUMB_RECIPE: i64 = 1;
-/// Recipes of the derivatives the background queue makes (Milestone 3b).
+/// Recipes of the derivatives the background queue makes (Milestone 3b,
+/// decision 0007). Their settings are in [`convert`].
 pub const PREVIEW_RECIPE: i64 = 1;
 pub const AUDIO_RECIPE: i64 = 1;
 pub const VIDEO_RECIPE: i64 = 1;
@@ -144,9 +146,18 @@ fn from_extension(e: &str) -> MediaKind {
 
 /// Fails unless the tools for thumbnails are installed.
 pub fn check_thumbnail_tools() -> Result<(), String> {
-    for (tool, arg) in [("convert", "-version"), ("ffmpeg", "-version")] {
+    check_tools(&["convert", "ffmpeg"])
+}
+
+/// Fails unless the tools for previews and conversions are installed.
+pub fn check_conversion_tools() -> Result<(), String> {
+    check_tools(&["convert", "ffmpeg", "ffprobe"])
+}
+
+fn check_tools(tools: &[&str]) -> Result<(), String> {
+    for tool in tools {
         let ok = Command::new(tool)
-            .arg(arg)
+            .arg("-version")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -167,19 +178,19 @@ pub fn thumbnail(src: &Path, out: &Path, kind: MediaKind, work_dir: &Path) -> Re
     let input = input::Input::prepare(src, work_dir)?;
     match kind {
         MediaKind::WebImage | MediaKind::Image => {
-            match run_tool(image_thumbnail(&input, out), TOOL_TIMEOUT) {
+            match run_tool(image_still(&input, out, Still::THUMB), TOOL_TIMEOUT) {
                 Ok(()) => {}
                 // An MP4-family file ImageMagick cannot read, such as a HEIF
                 // sequence with no still image or a video labelled as a
                 // picture: use its first video frame instead.
                 Err(first) if input.container() != input::Container::Other => {
-                    run_tool(video_thumbnail(&input, out), TOOL_TIMEOUT)
+                    run_tool(video_still(&input, out, Still::THUMB), TOOL_TIMEOUT)
                         .map_err(|second| shorten(&format!("{first}; then {second}")))?;
                 }
                 Err(e) => return Err(e),
             }
         }
-        MediaKind::Video => run_tool(video_thumbnail(&input, out), TOOL_TIMEOUT)?,
+        MediaKind::Video => run_tool(video_still(&input, out, Still::THUMB), TOOL_TIMEOUT)?,
         MediaKind::Voice | MediaKind::Audio | MediaKind::Other => {
             return Err(format!("no thumbnail for {} files", kind.as_str()));
         }
@@ -190,45 +201,86 @@ pub fn thumbnail(src: &Path, out: &Path, kind: MediaKind, work_dir: &Path) -> Re
     }
 }
 
-fn image_thumbnail(input: &input::Input, out: &Path) -> Command {
-    let size = format!("{THUMB_MAX}x{THUMB_MAX}>");
+/// Settings for a WebP still image: a thumbnail or a preview.
+#[derive(Debug, Clone, Copy)]
+pub struct Still {
+    /// Longest side, in pixels; smaller images keep their size.
+    pub max: u32,
+    pub quality: u32,
+    /// Keep the colour profile (previews), or strip everything (thumbnails).
+    pub keep_icc: bool,
+}
+
+impl Still {
+    pub const THUMB: Self = Self {
+        max: THUMB_MAX,
+        quality: 80,
+        keep_icc: false,
+    };
+}
+
+/// ImageMagick: the first frame of `input` as WebP.
+pub(crate) fn image_still(input: &input::Input, out: &Path, s: Still) -> Command {
+    let size = format!("{0}x{0}>", s.max);
     let mut cmd = Command::new("convert");
     cmd.args(["-limit", "thread", "1"])
         .args(["-limit", "memory", "256MiB"])
         .args(["-limit", "map", "512MiB"])
         // Lets libjpeg decode large JPEGs at a reduced scale.
-        .args(["-define", &format!("jpeg:size={0}x{0}", THUMB_MAX * 2)])
+        .args(["-define", &format!("jpeg:size={0}x{0}", s.max * 2)])
         .arg(input.magick_first_frame())
-        .args(["-auto-orient", "-thumbnail", &size, "-strip"])
-        .args(["-quality", "80"])
+        .arg("-auto-orient");
+    if s.keep_icc {
+        // Every profile but the colour one (Display P3 on iPhones), so
+        // browsers show the colours as shot.
+        cmd.args(["-resize", &size, "+profile", "!icc,*"]);
+    } else {
+        cmd.args(["-thumbnail", &size, "-strip"]);
+    }
+    cmd.args(["-quality", &s.quality.to_string()])
         .arg(format!("webp:{}", out.display()));
     cmd
 }
 
-fn video_thumbnail(input: &input::Input, out: &Path) -> Command {
+/// ffmpeg: the first video frame of `input` as WebP.
+pub(crate) fn video_still(input: &input::Input, out: &Path, s: Still) -> Command {
     let scale = format!(
-        "scale='min({THUMB_MAX},iw)':'min({THUMB_MAX},ih)':force_original_aspect_ratio=decrease"
+        "scale='min({0},iw)':'min({0},ih)':force_original_aspect_ratio=decrease",
+        s.max
     );
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-nostdin", "-v", "error", "-threads", "1", "-i"])
         .arg(input.path())
         .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale])
-        .args(["-c:v", "libwebp", "-quality", "80", "-f", "webp", "-y"])
+        .args(["-c:v", "libwebp", "-quality", &s.quality.to_string()])
+        .args(["-f", "webp", "-y"])
         .arg(out);
     cmd
 }
 
 /// Runs `cmd` with no input, killing it after `timeout`. On failure, returns
 /// the start of its error output.
-fn run_tool(mut cmd: Command, timeout: Duration) -> Result<(), String> {
+pub(crate) fn run_tool(cmd: Command, timeout: Duration) -> Result<(), String> {
+    run_tool_output(cmd, timeout).map(drop)
+}
+
+/// Like [`run_tool`], and returns the tool's standard output (at most 1 MB).
+pub(crate) fn run_tool_output(mut cmd: Command, timeout: Duration) -> Result<Vec<u8>, String> {
     let program = cmd.get_program().to_string_lossy().into_owned();
     let mut child = cmd
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("{program}: {e}"))?;
+    let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut stderr = child.stderr.take().expect("stderr is piped");
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = (&mut stdout).take(1 << 20).read_to_end(&mut buf);
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        buf
+    });
     // Read error output on its own thread so a chatty tool cannot block on a
     // full pipe; keep only the start of it.
     let reader = std::thread::spawn(move || {
@@ -251,9 +303,10 @@ fn run_tool(mut cmd: Command, timeout: Duration) -> Result<(), String> {
         }
     };
     let output = reader.join().unwrap_or_default();
+    let stdout = out_reader.join().unwrap_or_default();
     let status = status?;
     if status.success() {
-        return Ok(());
+        return Ok(stdout);
     }
     let text = String::from_utf8_lossy(&output);
     let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
@@ -261,7 +314,7 @@ fn run_tool(mut cmd: Command, timeout: Duration) -> Result<(), String> {
 }
 
 /// Error text short enough to store.
-fn shorten(s: &str) -> String {
+pub(crate) fn shorten(s: &str) -> String {
     const MAX: usize = 300;
     if s.len() <= MAX {
         return s.to_owned();

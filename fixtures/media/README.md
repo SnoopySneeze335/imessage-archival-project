@@ -36,3 +36,22 @@ reproducible from the files above:
   app reads a copy with the box renamed to `free`.
 
 Both reproduce the exact errors seen on the real backup (decision 0006).
+
+| File | What it is | How it was made |
+| --- | --- | --- |
+| `fixture-1s-hlg.mov` | 1 s, 64×48, 10 fps of `testsrc`, 10-bit HEVC tagged HDR (BT.2020, HLG), no audio, like an iPhone HDR video | `ffmpeg -f lavfi -i testsrc=size=64x48:rate=10 -t 1 -c:v libx265 -preset medium -crf 35 -pix_fmt yuv420p10le -x265-params colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc -color_primaries bt2020 -color_trc arib-std-b67 -colorspace bt2020nc -tag:v hvc1 -an -map_metadata -1 -fflags +bitexact -flags:v +bitexact fixture-1s-hlg.mov` (ffmpeg 6.1.1, x265 3.5) on Ubuntu 24.04 |
+| `fixture-1s-aac.adts` | 1 s of a 330 Hz mono AAC-LC tone at 8 kHz, as raw ADTS frames | `ffmpeg -f lavfi -i sine=frequency=330:sample_rate=8000 -t 1 -c:a aac -b:a 16k -ac 1 -map_metadata -1 -fflags +bitexact -flags:a +bitexact -f adts fixture-1s-aac.adts` (ffmpeg 6.1.1) on Ubuntu 24.04 |
+
+The background queue (Milestone 3b, decision 0007) is tested on these and on
+more attachments the generator derives:
+
+- **`fixture-1s-aac.adts` rewrapped into a CAF** (`media::caf_aac`), as iOS
+  stores AAC voice messages. ffmpeg cannot write AAC into CAF, so the
+  generator writes the `desc`, `kuki` (ES descriptor), `pakt` and `data`
+  chunks itself. The queue copies the AAC into an M4A without re-encoding.
+- **`fixture-1s-hlg.mov`** as an iPhone HDR video, converted to SDR H.264.
+- **`fixture-1s-aac.mp4` as it is**, which browsers play, so no file is made.
+- **A PNG labelled HEIC**, which browsers show, so no preview is made.
+- **Damaged files, one per converted kind**: the HEIC cut to 200 bytes, the
+  HEVC `.mov` cut to 600 bytes (before its `moov` box), and a PCM CAF cut to
+  40 bytes. Each must be recorded as failed without stopping the run.
