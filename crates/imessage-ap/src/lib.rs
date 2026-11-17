@@ -5,13 +5,17 @@
 pub mod address;
 pub mod archive;
 pub mod attachments;
+pub mod auth;
 pub mod backup;
 pub mod blobs;
 pub mod derive;
+pub mod dirs;
 pub mod ingest;
 pub mod media;
 pub mod server;
 pub mod stats;
+pub mod userdb;
+pub mod view;
 
 /// Crate version, reported by `/api/health` and recorded with each import.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

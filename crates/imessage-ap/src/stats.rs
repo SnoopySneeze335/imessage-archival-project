@@ -5,13 +5,13 @@
 //! each imported backup, imessage-database's own diagnostics of that backup,
 //! which use the same definitions as the counts in docs/SPEC.md.
 
-use std::{collections::BTreeMap, fmt::Write as _, path::Path};
+use std::{collections::BTreeMap, fmt::Write as _};
 
 use anyhow::Result;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::archive;
+use crate::{archive, dirs::Dirs};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct ArchiveStats {
@@ -102,9 +102,9 @@ fn n(conn: &Connection, sql: &str) -> Result<u64> {
     Ok(conn.query_row(sql, [], |r| r.get::<_, i64>(0))? as u64)
 }
 
-/// Reads counts from the archive in `data_dir`.
-pub fn collect(data_dir: &Path) -> Result<Stats> {
-    let conn = archive::open_read_only(data_dir)?;
+/// Reads counts from the archive.
+pub fn collect(dirs: &Dirs) -> Result<Stats> {
+    let conn = archive::open_read_only(dirs)?;
     let copied = n(
         &conn,
         "SELECT COUNT(*) FROM attachment_source WHERE sha256 IS NOT NULL",
@@ -259,7 +259,7 @@ pub fn collect(data_dir: &Path) -> Result<Stats> {
     })
 }
 
-fn thousands(v: u64) -> String {
+pub fn thousands(v: u64) -> String {
     let s = v.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {

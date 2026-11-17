@@ -84,7 +84,7 @@ The ingester and media worker only add to /data; user.db is the one store the ba
 
 ## Data model and storage
 
-The app keeps two kinds of data apart: derived data that can be rebuilt from backups, and user-authored data that exists only in the app.
+The app keeps two kinds of data apart: derived data that can be rebuilt from backups, and user-authored data that exists only in the app. The paths below are the defaults; each store can be moved, for example the databases and derived files to an SSD ([decision 0009](decisions/0009-store-locations.md)).
 
 | Path | Contents | Rebuildable |
 | --- | --- | --- |
@@ -245,11 +245,11 @@ The app runs as one container on snoopyserver, for one user, reachable only over
 | Setting | Value |
 | --- | --- |
 | Image | `ghcr.io/<user>/imessage-ap`, built by GitHub Actions from the public repo |
-| Volumes | `/backups` read-only, `/data` read-write |
+| Volumes | `/backups` read-only (imports only), `/data` read-write; the databases, blobs, derived files and exports can each live elsewhere ([decision 0009](decisions/0009-store-locations.md)) |
 | Port | 8080, configurable |
 | File ownership | PUID/PGID, default 99/100 for Unraid |
-| Auth | One password set on first run, hashed with Argon2; session cookie |
-| Remote access | Tailscale (`tailscale serve` or a sidecar); never exposed publicly |
+| Auth | One password set on first run with a setup code from the log, hashed with Argon2; session cookie ([decision 0008](decisions/0008-access-and-sign-in.md)) |
+| Remote access | Plain HTTP on the LAN and the tailnet, or HTTPS behind an optional reverse proxy such as `tailscale serve`; never exposed publicly |
 
 Privacy rules:
 

@@ -10,6 +10,7 @@ use std::{
 
 use common::{archive_db, count, dump, issues};
 use fixture_gen::{SMS_DB, file_id, generate, scenario};
+use imessage_ap::dirs::Dirs;
 use imessage_ap::{archive, ingest, stats};
 use tempfile::TempDir;
 
@@ -56,7 +57,7 @@ fn tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
 #[test]
 fn first_import_matches_fixture_expectations() {
     let e = env();
-    let summary = ingest::run(&e.backup, &e.data).unwrap();
+    let summary = ingest::run(&e.backup, &Dirs::under(&e.data)).unwrap();
     let x = &e.expected;
     let c = &summary.counts;
     assert_eq!(c.messages_seen, x.messages);
@@ -66,7 +67,7 @@ fn first_import_matches_fixture_expectations() {
     assert_eq!(c.attachments_added, x.attachments);
     assert_eq!(c.reactions_added, x.reactions);
 
-    let s = stats::collect(&e.data).unwrap();
+    let s = stats::collect(&Dirs::under(&e.data)).unwrap();
     let a = &s.archive;
     assert_eq!(a.messages as usize, x.messages);
     assert_eq!(a.orphan_messages as usize, x.messages_without_chat);
@@ -146,9 +147,9 @@ fn first_import_matches_fixture_expectations() {
 #[test]
 fn reimport_changes_nothing() {
     let e = env();
-    ingest::run(&e.backup, &e.data).unwrap();
+    ingest::run(&e.backup, &Dirs::under(&e.data)).unwrap();
     let before = dump(&archive_db(&e.data));
-    let second = ingest::run(&e.backup, &e.data).unwrap();
+    let second = ingest::run(&e.backup, &Dirs::under(&e.data)).unwrap();
     let after = dump(&archive_db(&e.data));
     assert!(before == after, "a second import changed the archive");
 
@@ -178,7 +179,9 @@ fn reimport_changes_nothing() {
 #[test]
 fn reactions_link_to_their_targets() {
     let e = env();
-    let run = ingest::run(&e.backup, &e.data).unwrap().run_id;
+    let run = ingest::run(&e.backup, &Dirs::under(&e.data))
+        .unwrap()
+        .run_id;
     let db = archive_db(&e.data);
     let reactions: Vec<_> = scenario::build()
         .messages
@@ -241,7 +244,9 @@ fn reactions_link_to_their_targets() {
 #[test]
 fn orphan_messages_are_kept_and_reported() {
     let e = env();
-    let run = ingest::run(&e.backup, &e.data).unwrap().run_id;
+    let run = ingest::run(&e.backup, &Dirs::under(&e.data))
+        .unwrap()
+        .run_id;
     let db = archive_db(&e.data);
     let s = scenario::build();
     let orphans: Vec<String> = s
@@ -283,7 +288,9 @@ fn orphan_messages_are_kept_and_reported() {
 #[test]
 fn missing_attachment_files_are_flagged() {
     let e = env();
-    let run = ingest::run(&e.backup, &e.data).unwrap().run_id;
+    let run = ingest::run(&e.backup, &Dirs::under(&e.data))
+        .unwrap()
+        .run_id;
     let db = archive_db(&e.data);
     let s = scenario::build();
     let mut missing_file = Vec::new();
@@ -350,7 +357,7 @@ fn backup_folder_is_never_written() {
     let before = tree(&e.backup);
     // Remove write permission everywhere (effective when not running as root).
     set_read_only(&e.backup, true);
-    let result = ingest::run(&e.backup, &e.data);
+    let result = ingest::run(&e.backup, &Dirs::under(&e.data));
     set_read_only(&e.backup, false);
     result.unwrap();
     assert!(tree(&e.backup) == before, "the backup folder changed");
@@ -389,9 +396,9 @@ fn encrypted_backups_are_refused_before_anything_is_written() {
     plist::Value::Dictionary(manifest)
         .to_file_binary(&path)
         .unwrap();
-    let err = ingest::run(&e.backup, &e.data).unwrap_err();
+    let err = ingest::run(&e.backup, &Dirs::under(&e.data)).unwrap_err();
     assert!(format!("{err:#}").contains("encrypted"), "{err:#}");
-    assert!(!archive::path(&e.data).exists());
+    assert!(!archive::path(&Dirs::under(&e.data)).exists());
 }
 
 #[test]
@@ -400,7 +407,7 @@ fn failed_import_is_recorded_and_rolled_back() {
     let id = file_id(SMS_DB.0, SMS_DB.1);
     let sms = e.backup.join(&id[..2]).join(&id);
     fs::write(&sms, b"not a database").unwrap();
-    assert!(ingest::run(&e.backup, &e.data).is_err());
+    assert!(ingest::run(&e.backup, &Dirs::under(&e.data)).is_err());
     let db = archive_db(&e.data);
     assert_eq!(
         count(
@@ -416,8 +423,8 @@ fn failed_import_is_recorded_and_rolled_back() {
 #[test]
 fn stats_never_print_message_content() {
     let e = env();
-    ingest::run(&e.backup, &e.data).unwrap();
-    let s = stats::collect(&e.data).unwrap();
+    ingest::run(&e.backup, &Dirs::under(&e.data)).unwrap();
+    let s = stats::collect(&Dirs::under(&e.data)).unwrap();
     let text = stats::render(&s);
     let json = serde_json::to_string(&s).unwrap();
     let sc = scenario::build();

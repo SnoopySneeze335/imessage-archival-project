@@ -17,6 +17,7 @@ use std::{
 
 use common::{archive_db, canonical_dump, count, downgrade_to_v4};
 use fixture_gen::{Variant, generate_variant, scenario};
+use imessage_ap::dirs::Dirs;
 use imessage_ap::{
     attachments, blobs,
     derive::{self, Options, Summary},
@@ -33,14 +34,19 @@ fn imported(dir: &TempDir, name: &str) -> PathBuf {
     let backup = dir.path().join(format!("{name}-backup"));
     let data = dir.path().join(name);
     generate_variant(&backup, Variant::V1).unwrap();
-    ingest::run(&backup, &data).unwrap();
-    attachments::run(&backup, &data, &attachments::Options::default()).unwrap();
+    ingest::run(&backup, &Dirs::under(&data)).unwrap();
+    attachments::run(
+        &backup,
+        &Dirs::under(&data),
+        &attachments::Options::default(),
+    )
+    .unwrap();
     fs::remove_dir_all(&backup).unwrap();
     data
 }
 
 fn derive(data: &Path, opts: &Options) -> Summary {
-    derive::run(data, opts).unwrap()
+    derive::run(&Dirs::under(data), opts).unwrap()
 }
 
 fn only(kind: Kind) -> Options {
@@ -109,7 +115,7 @@ fn derived(data: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 fn kind_stats(data: &Path, kind: &str) -> stats::DerivativeStats {
-    let mut a = stats::collect(data).unwrap().archive;
+    let mut a = stats::collect(&Dirs::under(data)).unwrap().archive;
     a.derivatives.remove(kind).unwrap()
 }
 
@@ -117,7 +123,7 @@ fn kind_stats(data: &Path, kind: &str) -> stats::DerivativeStats {
 fn each_kind_is_converted_or_left_as_it_is() {
     let dir = tempfile::tempdir().unwrap();
     let data = imported(&dir, "data");
-    let before = stats::collect(&data).unwrap().archive;
+    let before = stats::collect(&Dirs::under(&data)).unwrap().archive;
     assert_eq!(before.derivatives_pending, 12);
 
     let run = derive(&data, &Options::default());
@@ -227,7 +233,7 @@ fn each_kind_is_converted_or_left_as_it_is() {
     assert_eq!(leaked, 0);
 
     // Stats add up, and the byte total is what is on disk.
-    let a = stats::collect(&data).unwrap().archive;
+    let a = stats::collect(&Dirs::under(&data)).unwrap().archive;
     assert_eq!(a.derivatives_pending, 0);
     assert_eq!(a.derivatives_failed, 3 + 3);
     let on_disk: u64 = derived(&data).values().map(|b| b.len() as u64).sum();
@@ -273,7 +279,10 @@ fn kinds_run_one_at_a_time() {
     assert_eq!(derive(&data, &only(Kind::Audio)).counts.files_started, 3);
     assert_eq!(derive(&data, &only(Kind::Preview)).counts.files_started, 4);
     assert_eq!(
-        stats::collect(&data).unwrap().archive.derivatives_pending,
+        stats::collect(&Dirs::under(&data))
+            .unwrap()
+            .archive
+            .derivatives_pending,
         0
     );
 }
@@ -325,7 +334,7 @@ fn a_stopped_run_resumes_to_the_same_result() {
     assert_eq!(limited.counts.files_started, 3);
     assert_eq!(limited.counts.total(|k| k.pending_at_end), 7);
     // A partly written file left by a killed run is removed.
-    let tmp = blobs::tmp_dir(&data, blobs::DERIVED_DIR);
+    let tmp = blobs::tmp_dir(&data.join(blobs::DERIVED_DIR));
     fs::write(tmp.join("killed.mp4"), b"partial").unwrap();
     let rest = derive(&data, &Options::default());
     assert!(!rest.interrupted);
@@ -385,7 +394,7 @@ fn a_nearly_full_disk_stops_the_run_without_failing_files() {
     assert!(low.needed > low.free);
     assert!(!run.interrupted);
     assert_eq!(run.counts.files_started, 0);
-    let a = stats::collect(&data).unwrap().archive;
+    let a = stats::collect(&Dirs::under(&data)).unwrap().archive;
     assert_eq!((a.derivatives_pending, a.derivatives_failed), (12, 3));
     // With room again, the next run does everything.
     assert_eq!(derive(&data, &Options::default()).counts.files_started, 12);
@@ -397,7 +406,7 @@ fn a_plan_converts_nothing() {
     let data = imported(&dir, "data");
     let dump = canonical_dump(&archive_db(&data));
     let files = derived(&data);
-    let report = derive::plan(&data, &Options::default()).unwrap();
+    let report = derive::plan(&Dirs::under(&data), &Options::default()).unwrap();
     let files_of = |kind: &str, action: &str| report.rows[kind].get(action).map_or(0, |r| r.files);
     assert_eq!(
         files_of("preview", "transcode"),
@@ -460,7 +469,10 @@ fn outputs_belong_to_the_user_the_run_is() {
         assert_eq!((m.uid(), m.gid()), want, "{rel}");
     }
     assert_eq!(
-        stats::collect(&data).unwrap().archive.derivatives_pending,
+        stats::collect(&Dirs::under(&data))
+            .unwrap()
+            .archive
+            .derivatives_pending,
         0
     );
 }

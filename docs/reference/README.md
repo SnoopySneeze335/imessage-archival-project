@@ -111,3 +111,88 @@ own unique-address and duplicate-chat counts, are explained in
 [decision 0003](../decisions/0003-count-check-differences.md); SPEC.md now
 shows the 5.0.1 figures. The legacy data sizes were binary gigabytes (GiB);
 `imessage-ap stats` and SPEC.md use decimal GB.
+
+## Render check baseline
+
+`imessage-ap check-render` runs every message through the view the web app
+draws from ([decision 0010](../decisions/0010-render-model.md)) and prints
+counts, with GUIDs for problems. The GUIDs stay with the user; only counts
+are recorded here.
+
+### 4a-1 (2026-11-17)
+
+Run on the real archive after moving `archive.db` and `derived/` to the SSD
+paths ([decision 0009](../decisions/0009-store-locations.md)):
+
+- The move was checked first. `derived/` held 23,120 files and 6,295,910,761
+  bytes before and after, which equals the baseline thumb 16,764 + preview
+  5,665 + video 581 + audio 110 files. The `archive.db` copy was byte
+  identical (`cmp`). The appdata share is `shareUseCache="only"` on pool
+  `ssd_cache` with no secondary storage.
+- `stats --json` against `jan4-baseline.json` (`.archive` without `sources`)
+  showed no differences, and `derive --plan` showed 0 files.
+- Over plain HTTP the viewer showed 371,159 messages, 1,002 conversations,
+  27,694 attachments and 1 backup.
+
+| Measure | Count | Note |
+| --- | --- | --- |
+| Messages | 371,159 | = items + reactions |
+| Items drawn | 355,107 | |
+| Reactions | 16,052 | |
+| Render errors | 0 | |
+| Items in several conversations | 0 | |
+| `unknown`, `problem:unknown_item_type`, `problem:unknown_associated_type` | 0, 0, 0 | |
+| `recovered` | 7 | as in the baseline |
+| `problem:orphan` | 26 | as in the baseline |
+| `problem:reaction_target_missing` | 69 | as in decision 0003 |
+| Event kinds | 999 | |
+| `media:other` | 179 | |
+| Conversations listed | 883 | of 1,002 chats: see 3 below |
+| `problem:empty` | 43 | see 1 |
+| `file:missing`, `file:no_path` (items) | 38, 2 | see 2 |
+| `audio_message`, `media:voice` (items) | 113, 110 | see 2 |
+| `reaction:removed` | 0 | see 4 |
+| `reply` (items) | 69,091 | baseline `replies` is 73,219: see 5 |
+| `problem:reply_target_missing` | 306 | see 6 |
+
+Six of these needed explaining. Each now has its own counts in
+check-render's `details` section (and in `problem:empty:*`), so the next run
+answers it directly. Every new count has a case in the demo archive and a
+test that the parts add up to the totals.
+
+1. **43 empty messages.** Messages with no text, no subject, no shown
+   attachment and no balloon. The next run splits them by reason:
+   `problem:empty:no_body` (no text and no attributedBody in any version),
+   `body_undecoded` (a body the crate could not decode), `blank_text`, and
+   `only_hidden_attachments`. Messages whose text holds an attachment
+   placeholder (U+FFFC) but which have no attachment record are no longer
+   empty. They are drawn as an "attachment not in the backup" placeholder,
+   `file:no_record`, and counted in `attachments.unrecorded_placeholders`.
+2. **66 missing files against 38 items.** `file:*` labels count items, and
+   only visible attachments. `details.attachments` now counts files, split
+   into on items and visible, on items and hidden, and on reactions, with
+   `missing_on_messages` and `no_path_on_messages` matching `stats`. One item
+   can hold several missing files (the demo has one with two).
+   `details.audio_messages` splits the 113 voice messages into `voice`,
+   `other_media` by kind, `hidden_only`, `no_record` (a voice message iOS
+   deleted without keeping it), `no_attachment` and `unsent`.
+3. **883 of 1,002 chats listed.** The list holds chats with at least one
+   item. `details.conversations` counts the other 119 as `no_messages` or
+   `reactions_only` (a reaction delivered into another chat row for the same
+   person). They stay unlisted.
+4. **No reaction removals took effect.** `details.reactions` counts reaction
+   rows as adds and removals, and each removal as `removals_matched`,
+   `removals_without_add` or `removals_other_kind`. If iOS deletes a tapback
+   when it is taken back, removal rows come out as `removals_without_add`.
+5. **4,128 fewer replies than `stats`.** `stats` counts every message with
+   `reply_to_guid`. Reactions inside a thread carry one too, but they are
+   drawn on their target, not as replies. `details.replies` gives
+   `on_items + on_reactions + self_reference = with_reply_to`.
+6. **306 replies whose original is missing.** The view looks the original up
+   across the whole archive, so these originals are in no imported backup.
+   The likely cause is that they were deleted on the phone before Jan 4, and
+   Recently Deleted keeps messages for only 30 days. `details.replies` counts
+   the distinct missing originals (`target_missing_distinct`), and how many of
+   them a reaction also points at (`target_missing_also_reacted_to`). The demo
+   has a case. Milestone 4b draws these replies with a "message not
+   available" quote, not as an error.

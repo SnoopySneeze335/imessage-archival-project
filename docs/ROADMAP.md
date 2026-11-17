@@ -6,7 +6,7 @@ completes them.
 
 ## Next up
 
-1. **Milestone 4: Viewer**.
+1. **Milestone 4: Viewer**: 4a-1 in review; then 4a-2, 4b, 4c, 4d.
 2. **Milestone 5: Search**.
 
 ## 1. Foundation
@@ -70,13 +70,48 @@ Split into two PRs ([decision 0005](decisions/0005-blobs-and-derivatives.md)).
 
 ## 4. Viewer
 
-- [ ] Login: one Argon2-hashed password set on first run; session cookie
-- [ ] Conversation list, recent and alphabetical, with search at the top
+Split into five PRs, each ending with something to open and use. Reviews use
+the demo archive of invented data; real-data checks are counts only
+(`check-render`, `stats`).
+
+**4a-1: sign-in, store locations, render model, demo**
+
+- [x] Every store its own setting: `IMESSAGE_AP_DB_DIR`, `_BLOBS_DIR`, `_DERIVED_DIR`, `_EXPORTS_DIR`; two archives refused ([decision 0009](decisions/0009-store-locations.md))
+- [x] user.db with migrations: password, sessions, settings
+- [x] Login: one Argon2-hashed password set on first run with a one-time setup code from the log; session cookie that follows the scheme; plain HTTP and HTTPS behind a proxy both work ([decision 0008](decisions/0008-access-and-sign-in.md))
+- [x] `set-password`, rate-limited sign-in, Origin check against the request's own Host, request logs without query strings
+- [x] View module and `check-render` v1: every message to one kind, with reactions, attachments and flags; counts and GUIDs only ([decision 0010](decisions/0010-render-model.md))
+- [x] Demo archive: "All message kinds" conversations (1:1 and group) with a labelled example of every kind, a 25,000-message conversation, `docker run … demo`, `scripts/demo.sh`; a test fails on any kind without an example
+- [x] Playwright in CI (Chromium, WebKit, iPhone): first-run setup, sign-in, no request to any other host
+- [x] Check: the databases and derived files moved to the SSD paths, `stats --json` matches the baseline, `derive --plan` shows 0 pending: 23,120 derived files and 6.30 GB unchanged, archive.db identical, no stats differences (2026-11-17; [notes](reference/README.md#render-check-baseline))
+- [x] Check: `check-render` on the real archive: 371,159 messages = 355,107 items + 16,052 reactions, 0 render errors (2026-11-17; [notes](reference/README.md#render-check-baseline))
+- [x] Six counts from that run explained or split in `check-render` details: empty messages by reason and `file:no_record`; attachments per file; unlisted chats; reaction removals; replies on reactions; missing reply originals
+- [ ] Check: `check-render --json` again: the six breakdowns reconcile with `stats` (empty reasons, 66 missing files, 113 voice messages, 119 unlisted chats, removal rows, 4,128 replies on reactions)
+
+**4a-2: conversation list and view**
+
+- [ ] Conversation list, recent and alphabetical, with search at the top (filters by name or number); chats with no items are not listed (counted by `check-render`)
 - [ ] Conversation view: bubbles, grouping, time separators, virtualized 10,000+ messages
-- [ ] Reactions, replies, edits, unsent and recovered placeholders, system events
-- [ ] Inline images, video and audio; full-screen viewer; media gallery by month
 - [ ] Light and dark mode with manual toggle; phone layout
-- [ ] Display timezone setting (default America/Los_Angeles)
+
+**4b: every message kind**
+
+- [ ] Reactions, replies, edits, unsent and recovered placeholders, system events
+- [ ] A reply whose original is not in the archive shows a "message not available" quote, not an error
+- [ ] `file:no_record` placeholder; a decision on drawing each `problem:empty:*` reason from the 4a-1 re-check
+- [ ] Link previews, app balloons and effects from stored data only
+- [ ] `view::PENDING` 4b entries built, with demo examples
+
+**4c: attachments**
+
+- [ ] Inline images, video and audio (HTTP range requests); full-screen viewer; media gallery by month
+- [ ] Missing-file placeholders; `view::PENDING` empty
+
+**4d: names and settings**
+
+- [ ] Names from the backup's AddressBook, snapshotted at ingest
+- [ ] Display timezone setting (default America/Los_Angeles); theme; change password
+- [ ] Browser-side render check over every message
 
 ## 5. Search
 

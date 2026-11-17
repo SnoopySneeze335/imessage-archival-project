@@ -16,22 +16,24 @@ use std::{
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
-/// Original attachment files, by content hash.
-pub const BLOBS_DIR: &str = "blobs";
+use crate::dirs::Dirs;
+
+/// Original attachment files, by content hash (the default folder name).
+pub const BLOBS_DIR: &str = crate::dirs::BLOBS;
 /// Thumbnails, previews and conversions, by content hash of their blob.
-pub const DERIVED_DIR: &str = "derived";
+pub const DERIVED_DIR: &str = crate::dirs::DERIVED;
 /// Work-in-progress files inside `blobs/` and `derived/`. Anything here is
 /// left over from an interrupted run and is deleted at the start of the next.
 pub const TMP_DIR: &str = ".tmp";
-/// Lock file that keeps two file runs from working on one data directory.
+/// Lock file, beside archive.db, that keeps two file runs from working on one
+/// archive.
 pub const LOCK_FILE: &str = ".imessage-ap.lock";
 
 const COPY_BUFFER: usize = 1 << 20;
 
 /// Where the blob with `sha256` is stored.
-pub fn blob_path(data_dir: &Path, sha256: &str) -> PathBuf {
-    data_dir
-        .join(BLOBS_DIR)
+pub fn blob_path(dirs: &Dirs, sha256: &str) -> PathBuf {
+    dirs.blobs
         .join(&sha256[..2])
         .join(&sha256[2..4])
         .join(sha256)
@@ -46,10 +48,10 @@ pub fn derived_relative_path(kind: &str, sha256: &str, ext: &str) -> String {
     )
 }
 
-/// Temporary folder inside `blobs/` or `derived/`, on the same file system
-/// as the final paths so a rename can move files into place.
-pub fn tmp_dir(data_dir: &Path, store: &str) -> PathBuf {
-    data_dir.join(store).join(TMP_DIR)
+/// Temporary folder inside a store (`dirs.blobs` or `dirs.derived`), on the
+/// same file system as the final paths so a rename can move files into place.
+pub fn tmp_dir(store: &Path) -> PathBuf {
+    store.join(TMP_DIR)
 }
 
 /// A unique path in `dir` for a new temporary file.
@@ -61,10 +63,10 @@ pub fn tmp_path(dir: &Path, ext: &str) -> PathBuf {
 
 /// Deletes what an interrupted run left in the temporary folders, and makes
 /// sure they exist. Returns how many files were removed.
-pub fn reset_tmp(data_dir: &Path) -> Result<usize> {
+pub fn reset_tmp(dirs: &Dirs) -> Result<usize> {
     let mut removed = 0;
-    for store in [BLOBS_DIR, DERIVED_DIR] {
-        let dir = tmp_dir(data_dir, store);
+    for store in [&dirs.blobs, &dirs.derived] {
+        let dir = tmp_dir(store);
         if dir.is_dir() {
             for entry in fs::read_dir(&dir)? {
                 let path = entry?.path();
@@ -91,10 +93,10 @@ pub struct Stored {
 
 /// Copies `src` into the store under its SHA-256, unless that blob is
 /// already there. `src` is only ever opened for reading.
-pub fn store(src: &Path, data_dir: &Path) -> io::Result<Stored> {
-    let tmp = tmp_path(&tmp_dir(data_dir, BLOBS_DIR), "");
+pub fn store(src: &Path, dirs: &Dirs) -> io::Result<Stored> {
+    let tmp = tmp_path(&tmp_dir(&dirs.blobs), "");
     let result = copy_and_hash(src, &tmp).and_then(|(sha256, size)| {
-        let dest = blob_path(data_dir, &sha256);
+        let dest = blob_path(dirs, &sha256);
         let already_stored = fs::metadata(&dest).is_ok_and(|m| m.is_file() && m.len() == size);
         if already_stored {
             fs::remove_file(&tmp)?;
@@ -152,18 +154,19 @@ pub fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Holds the data directory's lock until dropped.
+/// Holds the archive's lock until dropped.
 #[derive(Debug)]
 pub struct Lock {
     _file: Option<File>,
 }
 
-/// Takes the data directory's exclusive lock, failing if another run holds
-/// it. Where the file system cannot lock files, this warns and goes on.
-pub fn lock(data_dir: &Path) -> Result<Lock> {
-    fs::create_dir_all(data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let path = data_dir.join(LOCK_FILE);
+/// Takes the exclusive lock in `db_dir`, the folder holding archive.db,
+/// failing if another run holds it. Where the file system cannot lock files,
+/// this warns and goes on.
+pub fn lock(db_dir: &Path) -> Result<Lock> {
+    fs::create_dir_all(db_dir)
+        .with_context(|| format!("creating database directory {}", db_dir.display()))?;
+    let path = db_dir.join(LOCK_FILE);
     let file = File::options()
         .create(true)
         .truncate(false)
@@ -174,7 +177,7 @@ pub fn lock(data_dir: &Path) -> Result<Lock> {
         Ok(()) => Ok(Lock { _file: Some(file) }),
         Err(fs::TryLockError::WouldBlock) => anyhow::bail!(
             "another imessage-ap run is using {}; wait for it to finish",
-            data_dir.display()
+            db_dir.display()
         ),
         Err(fs::TryLockError::Error(e)) => {
             tracing::warn!(error = %e, "this file system cannot lock files; make sure only one run uses the data directory");
@@ -190,7 +193,7 @@ mod tests {
     #[test]
     fn stores_once_by_content() {
         let dir = tempfile::tempdir().unwrap();
-        let data = dir.path().join("data");
+        let data = Dirs::under(&dir.path().join("data"));
         reset_tmp(&data).unwrap();
         let src = dir.path().join("a");
         fs::write(&src, b"abc").unwrap();
@@ -203,7 +206,7 @@ mod tests {
         assert!(blob_path(&data, sha).ends_with(format!("ba/78/{sha}")));
         assert!(store(&src, &data).unwrap().already_stored);
         assert_eq!(
-            fs::read_dir(tmp_dir(&data, BLOBS_DIR)).unwrap().count(),
+            fs::read_dir(tmp_dir(&data.blobs)).unwrap().count(),
             0,
             "temporary files left behind"
         );
@@ -212,19 +215,20 @@ mod tests {
     #[test]
     fn a_failed_read_leaves_nothing_behind() {
         let dir = tempfile::tempdir().unwrap();
-        let data = dir.path().join("data");
+        let data = Dirs::under(&dir.path().join("data"));
         reset_tmp(&data).unwrap();
         assert!(store(&dir.path().join("missing"), &data).is_err());
-        assert_eq!(fs::read_dir(tmp_dir(&data, BLOBS_DIR)).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(tmp_dir(&data.blobs)).unwrap().count(), 0);
     }
 
     #[test]
     fn leftover_temporary_files_are_removed() {
         let dir = tempfile::tempdir().unwrap();
-        reset_tmp(dir.path()).unwrap();
-        fs::write(tmp_dir(dir.path(), BLOBS_DIR).join("partial"), b"x").unwrap();
-        fs::write(tmp_dir(dir.path(), DERIVED_DIR).join("partial.webp"), b"x").unwrap();
-        assert_eq!(reset_tmp(dir.path()).unwrap(), 2);
+        let data = Dirs::under(dir.path());
+        reset_tmp(&data).unwrap();
+        fs::write(tmp_dir(&data.blobs).join("partial"), b"x").unwrap();
+        fs::write(tmp_dir(&data.derived).join("partial.webp"), b"x").unwrap();
+        assert_eq!(reset_tmp(&data).unwrap(), 2);
     }
 
     #[test]

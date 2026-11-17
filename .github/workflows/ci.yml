@@ -69,3 +69,42 @@ jobs:
             echo "Unexpected external URL in web/dist" >&2
             exit 1
           fi
+
+  browser:
+    name: Browser tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ImageMagick with HEIC decoding, and ffmpeg (demo data)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            imagemagick libheif1 libheif-plugin-libde265 ffmpeg
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the web app
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Prepare the demo archive (invented data)
+        run: scripts/demo.sh --prepare
+      - name: Install Playwright's Chromium and WebKit
+        working-directory: web
+        run: npx playwright install --with-deps chromium webkit
+      - name: Browser tests (Chromium, WebKit, iPhone)
+        working-directory: web
+        run: npx playwright test
+      - name: Screenshots and report (fixture data only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-tests
+          path: |
+            web/test-results/
+            web/playwright-report/
+          retention-days: 14

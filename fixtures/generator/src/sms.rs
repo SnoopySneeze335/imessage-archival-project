@@ -65,8 +65,8 @@ pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
 
     for a in &s.attachments {
         tx.execute(
-            "INSERT INTO attachment (ROWID, guid, created_date, start_date, filename, uti, mime_type, transfer_state, is_outgoing, transfer_name, total_bytes, is_sticker, original_guid)
-             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, 5, ?7, ?8, ?9, ?10, ?2)",
+            "INSERT INTO attachment (ROWID, guid, created_date, start_date, filename, uti, mime_type, transfer_state, is_outgoing, transfer_name, total_bytes, is_sticker, original_guid, hide_attachment)
+             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, 5, ?7, ?8, ?9, ?10, ?2, ?11)",
             params![
                 a.rowid,
                 a.guid,
@@ -78,6 +78,7 @@ pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
                 a.transfer_name,
                 a.total_bytes,
                 a.is_sticker,
+                a.hidden,
             ],
         )?;
     }
@@ -102,9 +103,10 @@ pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
                 associated_message_guid, associated_message_type, associated_message_range_location,
                 associated_message_range_length, associated_message_emoji, destination_caller_id,
                 thread_originator_guid, thread_originator_part, date_retracted, date_edited, part_count, sort_id,
-                attributedBody, balloon_bundle_id, message_summary_info, payload_data
+                attributedBody, balloon_bundle_id, message_summary_info, payload_data, subject,
+                expressive_send_style_id
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
-                      ?22, ?23, 0, ?24, ?25, ?26, ?27, ?28, ?29, ?30, 1, 0, ?31, ?32, ?33, ?34)",
+                      ?22, ?23, 0, ?24, ?25, ?26, ?27, ?28, ?29, ?30, 1, 0, ?31, ?32, ?33, ?34, ?35, ?36)",
             params![
                 m.rowid,
                 m.guid,
@@ -136,12 +138,19 @@ pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
                 m.thread_originator_part,
                 opt(m.date_retracted),
                 opt(m.date_edited),
-                m.text.as_deref().map(crate::typedstream::attributed_body),
-                m.link_preview.as_ref().map(|_| URL_BALLOON),
+                m.attributed_body_override
+                    .clone()
+                    .or_else(|| m.text.as_deref().map(crate::typedstream::attributed_body)),
+                m.link_preview
+                    .as_ref()
+                    .map(|_| URL_BALLOON)
+                    .or(m.balloon_bundle_id),
                 summary_info(m),
                 m.link_preview
                     .as_ref()
                     .map(|l| crate::plists::link_preview(l.url, l.title, l.summary, l.site_name)),
+                m.subject,
+                m.expressive_send_style_id,
             ],
         )?;
         if let Some(chat) = m.chat {

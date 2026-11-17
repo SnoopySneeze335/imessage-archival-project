@@ -26,7 +26,7 @@ use imessage_database::{
 use rusqlite::{Connection, Transaction, params};
 use serde::Serialize;
 
-use crate::{address, archive, backup::Backup};
+use crate::{address, archive, backup::Backup, dirs::Dirs};
 
 mod messages;
 
@@ -93,11 +93,11 @@ struct Issue {
     detail: Option<String>,
 }
 
-/// Imports `backup_dir` into the archive in `data_dir`.
-pub fn run(backup_dir: &Path, data_dir: &Path) -> Result<Summary> {
+/// Imports `backup_dir` into the archive.
+pub fn run(backup_dir: &Path, dirs: &Dirs) -> Result<Summary> {
     let backup = Backup::open(backup_dir)?;
     let (sms, sms_path) = backup.open_sms_db()?;
-    let mut db = archive::open(data_dir)?;
+    let mut db = archive::open(dirs)?;
 
     let run_id = start_run(&db, backup_dir)?;
     let result = (|| {
