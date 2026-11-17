@@ -68,6 +68,24 @@ message parts; 4c: attachment URLs). A PR that builds one moves it into
 `FEATURES` and adds its demo example in the same change, so the list
 shrinks to zero by the end of Milestone 4.
 
+**Details reconcile with `stats`.** check-render's `details` section ties
+its counts to the archive's own:
+
+- conversations listed vs chat rows, split into no messages and reactions
+  only;
+- attachments per file, by on-items-visible, on-items-hidden and
+  on-reactions, with each file state;
+- voice messages by what they hold;
+- reaction rows as adds and removals, and what each removal matched;
+- replies on items, on reactions and self-referencing.
+
+The 4a-1 real check showed these were needed
+(`docs/reference/README.md#render-check-baseline`). Empty messages carry
+one reason (`problem:empty:*`). Attachment placeholders with no record are
+drawn as `file:no_record`, not as empty. A reply whose original is not in
+the archive is drawn with a "message not available" quote in 4b; the count
+stays under problems so its GUIDs are listed.
+
 ## Consequences
 
 - The UI can draw from an exhaustive set of kinds and states; anything new

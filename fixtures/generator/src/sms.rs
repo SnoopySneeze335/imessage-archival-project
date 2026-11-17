@@ -138,7 +138,9 @@ pub fn write(conn: &Connection, s: &Scenario) -> rusqlite::Result<()> {
                 m.thread_originator_part,
                 opt(m.date_retracted),
                 opt(m.date_edited),
-                m.text.as_deref().map(crate::typedstream::attributed_body),
+                m.attributed_body_override
+                    .clone()
+                    .or_else(|| m.text.as_deref().map(crate::typedstream::attributed_body)),
                 m.link_preview
                     .as_ref()
                     .map(|_| URL_BALLOON)

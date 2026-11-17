@@ -87,6 +87,9 @@ pub struct Message {
     pub expressive_send_style_id: Option<&'static str>,
     /// An iMessage app's balloon; link previews set theirs from `link_preview`.
     pub balloon_bundle_id: Option<&'static str>,
+    /// Raw `attributedBody` bytes instead of the encoded text (a body that
+    /// does not decode).
+    pub attributed_body_override: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1061,13 +1064,13 @@ mod tests {
         let n = s
             .messages
             .iter()
-            .filter(|m| m.chat == Some(15) && m.associated_message_type == 0)
+            .filter(|m| m.chat == Some(17) && m.associated_message_type == 0)
             .count();
         assert_eq!(n, LARGE_CHAT_MESSAGES);
         let guids: std::collections::BTreeSet<&str> =
             s.messages.iter().map(|m| m.guid.as_str()).collect();
         assert_eq!(guids.len(), s.messages.len(), "GUIDs are unique");
-        assert_eq!(build_demo(false).chats.len(), 14);
+        assert_eq!(build_demo(false).chats.len(), 16);
     }
 
     #[test]

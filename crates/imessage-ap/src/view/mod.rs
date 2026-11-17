@@ -109,6 +109,10 @@ pub const FEATURES: &[(&str, &str)] = &[
         "A preview or conversion is still queued (run `derive`)",
     ),
     ("file:hidden", "An attachment iOS marks hidden"),
+    (
+        "file:no_record",
+        "The text holds an attachment placeholder but the backup has no record of the file: placeholder",
+    ),
     // Reactions on an item.
     ("reaction:loved", "Tapback: heart"),
     ("reaction:liked", "Tapback: thumbs up"),
@@ -152,7 +156,26 @@ pub const FEATURES: &[(&str, &str)] = &[
         "problem:unknown_associated_type",
         "Associated-message type this version does not know",
     ),
-    ("problem:empty", "A message with nothing to show"),
+    (
+        "problem:empty",
+        "A message with nothing to show (one of the four reasons below)",
+    ),
+    (
+        "problem:empty:no_body",
+        "Empty: no text and no attributedBody in any version",
+    ),
+    (
+        "problem:empty:body_undecoded",
+        "Empty: an attributedBody that did not decode to text",
+    ),
+    (
+        "problem:empty:blank_text",
+        "Empty: text of spaces or line breaks only",
+    ),
+    (
+        "problem:empty:only_hidden_attachments",
+        "Empty: its only attachments are ones iOS hides",
+    ),
     (
         "problem:reply_target_missing",
         "A reply whose original is not in the archive",
@@ -207,6 +230,9 @@ pub enum Body {
         text: Option<String>,
         subject: Option<String>,
         attachments: Vec<AttachmentView>,
+        /// Attachment placeholders in the text with no attachment record:
+        /// drawn as "attachment not in the backup".
+        unrecorded_attachments: usize,
         /// `url` or `app`.
         balloon: Option<&'static str>,
         /// The app's bundle ID, for app balloons.
@@ -340,6 +366,8 @@ struct Row {
     unsent: bool,
     recovered: bool,
     edited: bool,
+    /// Some version of the message has an attributedBody.
+    has_body: bool,
 }
 
 const CHUNK: usize = 500;
@@ -373,7 +401,9 @@ fn load_chunk(db: &Connection, ids: &[i64]) -> Result<Vec<Item>> {
                     m.text, m.subject, m.item_type, m.group_action_type, m.other_handle_id, ho.address,
                     m.group_title, m.associated_message_type, m.reply_to_guid, m.balloon_bundle_id,
                     m.expressive_send_style_id, m.is_audio_message, m.is_unsent, m.is_recovered_deleted,
-                    m.edited_at
+                    m.edited_at,
+                    EXISTS (SELECT 1 FROM message_version v
+                            WHERE v.message_id = m.id AND v.attributed_body IS NOT NULL)
              FROM message m
              LEFT JOIN handle hs ON hs.id = m.sender_handle_id
              LEFT JOIN handle ho ON ho.id = m.other_handle_id
@@ -402,6 +432,7 @@ fn load_chunk(db: &Connection, ids: &[i64]) -> Result<Vec<Item>> {
                 unsent: r.get(19)?,
                 recovered: r.get(20)?,
                 edited: r.get::<_, Option<i64>>(21)?.is_some(),
+                has_body: r.get(22)?,
             };
             rows.insert(row.id, row);
         }
@@ -428,7 +459,7 @@ fn load_chunk(db: &Connection, ids: &[i64]) -> Result<Vec<Item>> {
 
 /// The label of an attachment's file state, from its record, its blob and
 /// the derivatives made from it.
-fn file_state(
+pub(crate) fn file_state(
     missing: Option<&str>,
     sha256: Option<&str>,
     derivative_states: &[String],
@@ -509,7 +540,7 @@ fn load_attachments(
 
 /// A reaction message, as stored.
 #[derive(Debug, Clone)]
-struct RawReaction {
+pub(crate) struct RawReaction {
     part: i64,
     kind: i64,
     emoji: Option<String>,
@@ -579,30 +610,81 @@ fn existing_guids(db: &Connection, guids: &[&str]) -> Result<HashSet<String>> {
     Ok(out)
 }
 
+/// What folding one message's reactions did, for check-render.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ReactionTally {
+    /// Reaction rows that add a tapback, emoji or sticker.
+    pub adds: usize,
+    /// Reaction rows that take one back (3000-3007).
+    pub removals: usize,
+    /// Removals that took back a standing reaction.
+    pub removals_matched: usize,
+    /// Removals from someone with no earlier reaction on that part.
+    pub removals_without_add: usize,
+    /// Removals of a different kind than the person's standing reaction.
+    pub removals_other_kind: usize,
+    /// Tapbacks replaced by a newer one from the same person.
+    pub replaced: usize,
+    /// Rows with a type that names no reaction kind.
+    pub unknown_kind: usize,
+    /// Reactions left standing.
+    pub standing: usize,
+}
+
+impl std::ops::AddAssign for ReactionTally {
+    fn add_assign(&mut self, o: Self) {
+        self.adds += o.adds;
+        self.removals += o.removals;
+        self.removals_matched += o.removals_matched;
+        self.removals_without_add += o.removals_without_add;
+        self.removals_other_kind += o.removals_other_kind;
+        self.replaced += o.replaced;
+        self.unknown_kind += o.unknown_kind;
+        self.standing += o.standing;
+    }
+}
+
 /// The reactions still standing after removals, one per person and part:
 /// a newer tapback from the same person replaces the older one, and a
-/// removal takes back a matching one. Returns them and whether any removal
-/// took effect.
-fn standing_reactions(raw: Vec<RawReaction>) -> (Vec<ReactionView>, bool) {
+/// removal takes back a matching one.
+pub(crate) fn standing_reactions(raw: Vec<RawReaction>) -> (Vec<ReactionView>, ReactionTally) {
     // Keyed by who reacted (from me, sender handle) and on which part.
     type Who = (bool, Option<i64>, i64);
     let mut current: Vec<(Who, ReactionView)> = Vec::new();
-    let mut removed = false;
+    let mut t = ReactionTally::default();
+    let mut seen: HashSet<Who> = HashSet::new();
     for r in raw {
         let Some(kind) = reaction_kind(r.kind) else {
+            t.unknown_kind += 1;
             continue;
         };
         let who = (r.from_me, r.sender.as_ref().map(|h| h.id), r.part);
         let pos = current.iter().position(|(k, _)| *k == who);
         if r.removal {
-            if let Some(p) = pos
-                && current[p].1.kind == kind
-            {
-                current.remove(p);
-                removed = true;
+            t.removals += 1;
+            match pos {
+                Some(p) if current[p].1.kind == kind => {
+                    current.remove(p);
+                    t.removals_matched += 1;
+                }
+                // A sticker stacks beside a tapback: look for a match among them.
+                Some(_) => match current
+                    .iter()
+                    .position(|(k, v)| *k == who && v.kind == kind)
+                {
+                    Some(p) => {
+                        current.remove(p);
+                        t.removals_matched += 1;
+                    }
+                    None => t.removals_other_kind += 1,
+                },
+                None if seen.contains(&who) => t.removals_other_kind += 1,
+                None => t.removals_without_add += 1,
             }
             continue;
         }
+        t.adds += 1;
+        seen.insert(who);
         let view = ReactionView {
             kind,
             emoji: r.emoji,
@@ -612,11 +694,51 @@ fn standing_reactions(raw: Vec<RawReaction>) -> (Vec<ReactionView>, bool) {
         };
         match pos {
             // Stickers stack; tapbacks replace.
-            Some(p) if kind != "sticker" && current[p].1.kind != "sticker" => current[p].1 = view,
+            Some(p) if kind != "sticker" && current[p].1.kind != "sticker" => {
+                current[p].1 = view;
+                t.replaced += 1;
+            }
             _ => current.push((who, view)),
         }
     }
-    (current.into_iter().map(|(_, v)| v).collect(), removed)
+    t.standing = current.len();
+    (current.into_iter().map(|(_, v)| v).collect(), t)
+}
+
+/// Every reaction in the archive grouped by target: the target GUID,
+/// whether it is in the archive, and its reactions oldest first.
+pub(crate) type ReactionGroup = (String, bool, Vec<RawReaction>);
+
+pub(crate) fn all_reactions(db: &Connection) -> Result<Vec<ReactionGroup>> {
+    let mut stmt = db.prepare(
+        "SELECT r.target_guid, r.target_part, r.kind, r.emoji, r.is_removal, m.is_from_me,
+                m.sender_handle_id, h.address,
+                EXISTS (SELECT 1 FROM message t WHERE t.guid = r.target_guid)
+         FROM reaction r
+         JOIN message m ON m.id = r.message_id
+         LEFT JOIN handle h ON h.id = m.sender_handle_id
+         ORDER BY r.target_guid, m.sent_at, m.id",
+    )?;
+    let mut out: Vec<ReactionGroup> = Vec::new();
+    let mut last: Option<String> = None;
+    let mut q = stmt.query([])?;
+    while let Some(r) = q.next()? {
+        let target: String = r.get(0)?;
+        let raw = RawReaction {
+            part: r.get(1)?,
+            kind: r.get(2)?,
+            emoji: r.get(3)?,
+            removal: r.get(4)?,
+            from_me: r.get(5)?,
+            sender: handle_view(r.get(6)?, r.get(7)?),
+        };
+        if last.as_deref() != Some(target.as_str()) {
+            out.push((target.clone(), r.get(8)?, Vec::new()));
+            last = Some(target);
+        }
+        out.last_mut().expect("pushed above").2.push(raw);
+    }
+    Ok(out)
 }
 
 /// The group event an item type and action name, as in imessage-database's
@@ -716,6 +838,20 @@ fn build(
                     .unwrap_or(b)
                     .to_owned()
             });
+            // Attachment placeholders (U+FFFC) beyond the attachment records:
+            // files the backup has no record of. App balloons use one too.
+            let placeholders = row
+                .text
+                .as_deref()
+                .map_or(0, |t| t.matches('\u{FFFC}').count());
+            let unrecorded = if balloon.is_none() {
+                placeholders.saturating_sub(attachments.len())
+            } else {
+                0
+            };
+            if unrecorded > 0 {
+                f.push("file:no_record");
+            }
             let visible: Vec<AttachmentView> = attachments
                 .iter()
                 .filter(|(_, hidden)| !hidden)
@@ -751,13 +887,28 @@ fn build(
                 && visible.is_empty()
                 && balloon.is_none()
                 && !vote
+                && unrecorded == 0
             {
                 f.push("problem:empty");
+                let blank = row
+                    .text
+                    .as_deref()
+                    .is_some_and(|t| !t.replace('\u{FFFC}', "").is_empty());
+                f.push(if !attachments.is_empty() {
+                    "problem:empty:only_hidden_attachments"
+                } else if blank {
+                    "problem:empty:blank_text"
+                } else if row.has_body {
+                    "problem:empty:body_undecoded"
+                } else {
+                    "problem:empty:no_body"
+                });
             }
             Body::Message {
                 text,
                 subject,
                 attachments: visible,
+                unrecorded_attachments: unrecorded,
                 balloon,
                 app,
                 audio_message: row.audio,
@@ -808,7 +959,8 @@ fn build(
         _ => {}
     }
 
-    let (reactions, removed) = standing_reactions(reactions);
+    let (reactions, tally) = standing_reactions(reactions);
+    let removed = tally.removals_matched > 0;
     for r in &reactions {
         f.push(reaction_label(r.kind));
     }
@@ -946,15 +1098,18 @@ mod tests {
     #[test]
     fn reactions_replace_and_remove() {
         // Loved, then removed it, then liked: one like.
-        let (v, removed) = standing_reactions(vec![
+        let (v, t) = standing_reactions(vec![
             r(2000, false, Some(1)),
             r(3000, true, Some(1)),
             r(2001, false, Some(1)),
         ]);
         assert_eq!(v.iter().map(|r| r.kind).collect::<Vec<_>>(), ["liked"]);
-        assert!(removed);
+        assert_eq!(
+            (t.adds, t.removals, t.removals_matched, t.standing),
+            (2, 1, 1, 1)
+        );
         // A newer tapback replaces the older; another person adds their own.
-        let (v, removed) = standing_reactions(vec![
+        let (v, t) = standing_reactions(vec![
             r(2000, false, Some(1)),
             r(2003, false, Some(1)),
             r(2004, false, None),
@@ -963,12 +1118,15 @@ mod tests {
             v.iter().map(|r| r.kind).collect::<Vec<_>>(),
             ["laughed", "emphasized"]
         );
-        assert!(!removed);
+        assert_eq!((t.replaced, t.removals), (1, 0));
         // Removing a type that is not there changes nothing.
-        let (v, removed) =
-            standing_reactions(vec![r(2000, false, Some(1)), r(3001, true, Some(1))]);
+        let (v, t) = standing_reactions(vec![r(2000, false, Some(1)), r(3001, true, Some(1))]);
         assert_eq!(v.len(), 1);
-        assert!(!removed);
+        assert_eq!((t.removals_matched, t.removals_other_kind), (0, 1));
+        // A removal from someone who never reacted.
+        let (v, t) = standing_reactions(vec![r(3000, true, Some(2))]);
+        assert!(v.is_empty());
+        assert_eq!(t.removals_without_add, 1);
     }
 
     #[test]

@@ -23,7 +23,11 @@ const ROWAN: i64 = 14;
 const THEO: i64 = 15;
 const KINDS_CHAT: i64 = 13;
 const KINDS_GROUP: i64 = 14;
-const LARGE_CHAT: i64 = 15;
+/// A chat no message belongs to, and one whose only messages are reactions:
+/// both exist in real backups and are not listed.
+const EMPTY_CHAT: i64 = 15;
+const REACTIONS_ONLY_CHAT: i64 = 16;
+const LARGE_CHAT: i64 = 17;
 
 const APP_BALLOON: &str = "com.apple.messages.MSMessageExtensionBalloonPlugin:EXAMPLE001:com.example.fixturegame.MessagesExtension";
 
@@ -116,6 +120,24 @@ pub fn build_demo(large: bool) -> Scenario {
         style: STYLE_GROUP,
         display_name: Some(KINDS_GROUP_TITLE.to_owned()),
         participants: vec![ROWAN, 1, 4],
+    });
+    b.s.chats.push(Chat {
+        rowid: EMPTY_CHAT,
+        guid: "SMS;-;+12065550121".to_owned(),
+        chat_identifier: "+12065550121".to_owned(),
+        service_name: SERVICE_SMS,
+        style: STYLE_DIRECT,
+        display_name: None,
+        participants: vec![THEO],
+    });
+    b.s.chats.push(Chat {
+        rowid: REACTIONS_ONLY_CHAT,
+        guid: "SMS;-;+12065550120".to_owned(),
+        chat_identifier: "+12065550120".to_owned(),
+        service_name: SERVICE_SMS,
+        style: STYLE_DIRECT,
+        display_name: None,
+        participants: vec![ROWAN],
     });
     kinds_chat(&mut b);
     kinds_group(&mut b);
@@ -364,6 +386,17 @@ fn kinds_chat(b: &mut Builder) {
 
     b.label(
         c,
+        "reply",
+        "a reply, then a reaction inside its thread (counted under replies.on_reactions)",
+    );
+    let in_thread = b.reply(c, me, &first, "Another reply in the same thread");
+    b.react(c, rowan, &in_thread, Tapback::Liked, false);
+    let i = b.s.messages.len() - 1;
+    b.s.messages[i].thread_originator_guid = Some(first.clone());
+    b.s.messages[i].thread_originator_part = Some("0:0:10".to_owned());
+
+    b.label(
+        c,
         "problem:reply_target_missing",
         "a reply whose original is gone",
     );
@@ -426,6 +459,25 @@ fn kinds_chat(b: &mut Builder) {
     b.react(c, me, &target, Tapback::Loved, false);
     b.react(c, me, &target, Tapback::Loved, true);
 
+    b.label(
+        c,
+        "text",
+        "a removal with no reaction before it, and one of another kind (counted, not shown)",
+    );
+    let target = b.say(c, rowan, "Removals that match nothing");
+    b.react(c, me, &target, Tapback::Laughed, true);
+    b.react(c, rowan, &target, Tapback::Liked, false);
+    b.react(c, rowan, &target, Tapback::Loved, true);
+    // Delivered into another chat row (SMS) for the same person: that chat
+    // holds only this reaction and is not listed.
+    b.react(
+        REACTIONS_ONLY_CHAT,
+        rowan,
+        &target,
+        Tapback::Emphasized,
+        false,
+    );
+
     b.label(c, "reaction:several", "reactions from both of us");
     let target = b.say(c, me, "Two reactions on this one");
     b.react(c, rowan, &target, Tapback::Laughed, false);
@@ -454,8 +506,98 @@ fn kinds_chat(b: &mut Builder) {
     b.s.messages[i].associated_message_guid = Some(format!("p:0/{first}"));
     b.s.messages[i].associated_message_type = 5000;
 
-    b.label(c, "problem:empty", "a message with nothing in it");
+    b.label(
+        c,
+        "file:no_record",
+        "an attachment placeholder with no attachment record",
+    );
+    b.push(Some(c), rowan, Some("\u{FFFC}".into()));
+
+    b.label(
+        c,
+        "audio_message",
+        "a voice message whose file has no record (expired)",
+    );
+    let i = b.push(Some(c), rowan, Some("\u{FFFC}".into()));
+    b.s.messages[i].is_audio_message = true;
+
+    b.label(
+        c,
+        "audio_message",
+        "a voice message stored as M4A (media:audio)",
+    );
+    let v = b.attach(
+        c,
+        me,
+        "Audio Message.m4a",
+        "audio/x-m4a",
+        "com.apple.m4a-audio",
+        Some(AAC_AUDIO_SAMPLE.to_vec()),
+        true,
+        false,
+    );
+    b.s.messages[v].is_audio_message = true;
+
+    b.label(
+        c,
+        "file:missing",
+        "two missing photos in one message (two files, one item)",
+    );
+    let i = b.push(Some(c), rowan, Some("\u{FFFC}\u{FFFC}".into()));
+    b.add_file(
+        i,
+        "IMG_2501.HEIC",
+        "image/heic",
+        "public.heic",
+        None,
+        true,
+        false,
+    );
+    b.add_file(
+        i,
+        "IMG_2502.HEIC",
+        "image/heic",
+        "public.heic",
+        None,
+        true,
+        false,
+    );
+
+    b.label(
+        c,
+        "problem:empty:no_body",
+        "a message with no text and no body",
+    );
     b.push(Some(c), rowan, None);
+
+    b.label(
+        c,
+        "problem:empty:body_undecoded",
+        "a body that does not decode",
+    );
+    let i = b.push(Some(c), rowan, None);
+    b.s.messages[i].attributed_body_override =
+        Some(b"streamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84".to_vec());
+
+    b.label(c, "problem:empty:blank_text", "text of spaces only");
+    b.say(c, rowan, "   ");
+
+    b.label(
+        c,
+        "problem:empty:only_hidden_attachments",
+        "only a hidden attachment",
+    );
+    let i = b.push(Some(c), rowan, Some("\u{FFFC}".into()));
+    let a = b.add_file(
+        i,
+        "hidden-only.png",
+        "image/png",
+        "public.png",
+        Some(png(9)),
+        true,
+        false,
+    );
+    b.s.attachments[(a - 1) as usize].hidden = true;
 
     b.wait(5);
     b.say(

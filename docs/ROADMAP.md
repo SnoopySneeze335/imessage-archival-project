@@ -83,18 +83,22 @@ the demo archive of invented data; real-data checks are counts only
 - [x] View module and `check-render` v1: every message to one kind, with reactions, attachments and flags; counts and GUIDs only ([decision 0010](decisions/0010-render-model.md))
 - [x] Demo archive: "All message kinds" conversations (1:1 and group) with a labelled example of every kind, a 25,000-message conversation, `docker run … demo`, `scripts/demo.sh`; a test fails on any kind without an example
 - [x] Playwright in CI (Chromium, WebKit, iPhone): first-run setup, sign-in, no request to any other host
-- [ ] Check: the databases and derived files moved to the SSD paths, `stats --json` matches the baseline, `derive --plan` shows 0 pending
-- [ ] Check: `check-render` on the real archive: 0 render errors; counts per kind and problem sent back
+- [x] Check: the databases and derived files moved to the SSD paths, `stats --json` matches the baseline, `derive --plan` shows 0 pending: 23,120 derived files and 6.30 GB unchanged, archive.db identical, no stats differences (2026-11-17; [notes](reference/README.md#render-check-baseline))
+- [x] Check: `check-render` on the real archive: 371,159 messages = 355,107 items + 16,052 reactions, 0 render errors (2026-11-17; [notes](reference/README.md#render-check-baseline))
+- [x] Six counts from that run explained or split in `check-render` details: empty messages by reason and `file:no_record`; attachments per file; unlisted chats; reaction removals; replies on reactions; missing reply originals
+- [ ] Check: `check-render --json` again: the six breakdowns reconcile with `stats` (empty reasons, 66 missing files, 113 voice messages, 119 unlisted chats, removal rows, 4,128 replies on reactions)
 
 **4a-2: conversation list and view**
 
-- [ ] Conversation list, recent and alphabetical, with search at the top (filters by name or number)
+- [ ] Conversation list, recent and alphabetical, with search at the top (filters by name or number); chats with no items are not listed (counted by `check-render`)
 - [ ] Conversation view: bubbles, grouping, time separators, virtualized 10,000+ messages
 - [ ] Light and dark mode with manual toggle; phone layout
 
 **4b: every message kind**
 
 - [ ] Reactions, replies, edits, unsent and recovered placeholders, system events
+- [ ] A reply whose original is not in the archive shows a "message not available" quote, not an error
+- [ ] `file:no_record` placeholder; a decision on drawing each `problem:empty:*` reason from the 4a-1 re-check
 - [ ] Link previews, app balloons and effects from stored data only
 - [ ] `view::PENDING` 4b entries built, with demo examples
 

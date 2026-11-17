@@ -147,6 +147,66 @@ fn check_render_prints_counts_and_guids_only() {
     );
     assert_eq!(report.items + report.reactions, report.messages);
     assert_eq!(report.problems["problem:orphan"].count, 1);
+
+    // The details add up to the archive's own totals, and the demo holds an
+    // example of each part.
+    let d = &report.details;
+    let r = &d.replies;
+    assert_eq!(
+        r.on_items + r.on_reactions + r.self_reference,
+        r.with_reply_to
+    );
+    assert_eq!(
+        r.with_reply_to,
+        common::count(
+            &conn,
+            "SELECT COUNT(*) FROM message WHERE reply_to_guid IS NOT NULL"
+        )
+    );
+    assert!(r.on_reactions >= 1 && r.target_missing >= 1);
+    let c = &d.conversations;
+    assert_eq!(c.listed + c.no_messages + c.reactions_only, c.chats);
+    assert_eq!(c.listed, report.conversations);
+    assert!(c.no_messages >= 1 && c.reactions_only >= 1);
+    let a = &d.attachments;
+    let per_file: usize = [&a.on_items_visible, &a.on_items_hidden, &a.on_reactions]
+        .iter()
+        .flat_map(|m| m.values())
+        .sum();
+    assert_eq!(a.ownerless + per_file, a.records);
+    assert_eq!(
+        a.missing_on_messages,
+        [&a.on_items_visible, &a.on_items_hidden, &a.on_reactions]
+            .iter()
+            .filter_map(|m| m.get("missing"))
+            .sum::<usize>()
+    );
+    assert!(a.unrecorded_placeholders >= 2);
+    let au = &d.audio_messages;
+    let other: usize = au.other_media.values().sum();
+    assert_eq!(
+        au.unsent + au.voice + other + au.hidden_only + au.no_record + au.no_attachment,
+        au.total
+    );
+    assert!(au.no_record >= 1 && other >= 1);
+    let rx = &d.reactions;
+    let f = &rx.folded;
+    assert_eq!(
+        f.adds + f.removals + f.unknown_kind + rx.target_missing,
+        rx.rows
+    );
+    assert_eq!(rx.rows, report.reactions);
+    assert!(f.removals_matched >= 1 && f.removals_without_add >= 1 && f.removals_other_kind >= 1);
+    let empty: usize = [
+        "problem:empty:no_body",
+        "problem:empty:body_undecoded",
+        "problem:empty:blank_text",
+        "problem:empty:only_hidden_attachments",
+    ]
+    .iter()
+    .map(|l| report.features[*l])
+    .sum();
+    assert_eq!(empty, report.features["problem:empty"]);
     assert_eq!(report.problems["problem:reaction_target_missing"].count, 1);
 }
 
